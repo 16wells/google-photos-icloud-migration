@@ -51,11 +51,24 @@ class DriveDownloader:
                     self.credentials_file, SCOPES)
                 
                 # Check if we're in a headless environment (no DISPLAY)
-                # Use console flow for headless environments
+                # Use manual authorization for headless environments
                 if os.environ.get('DISPLAY') is None or not self._can_open_browser():
-                    logger.info("Running in headless mode - using console authentication")
-                    logger.info("Please visit the URL below and authorize the application:")
-                    creds = flow.run_console()
+                    logger.info("=" * 60)
+                    logger.info("Running in headless mode - Manual authorization required")
+                    logger.info("=" * 60)
+                    auth_url, _ = flow.authorization_url(prompt='consent')
+                    logger.info("")
+                    logger.info("Please visit this URL to authorize the application:")
+                    logger.info("")
+                    logger.info(auth_url)
+                    logger.info("")
+                    logger.info("After authorizing, you will be redirected to a page.")
+                    logger.info("Copy the ENTIRE URL from your browser's address bar")
+                    logger.info("and paste it here:")
+                    logger.info("")
+                    authorization_response = input("Enter the authorization response URL: ").strip()
+                    flow.fetch_token(authorization_response=authorization_response)
+                    creds = flow.credentials
                 else:
                     creds = flow.run_local_server(port=0)
             
