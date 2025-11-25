@@ -120,20 +120,36 @@ class DriveDownloader:
         if folder_id:
             query += f" and '{folder_id}' in parents"
         
-        if pattern:
-            # Convert pattern to Drive query format
-            # Remove wildcards and use contains
-            pattern_clean = pattern.replace('*', '').replace('.zip', '')
-            query += f" and name contains '{pattern_clean}'"
-        
         results = self.service.files().list(
             q=query,
             fields="files(id, name, size, modifiedTime)",
             pageSize=1000
         ).execute()
         
-        files = results.get('files', [])
-        logger.info(f"Found {len(files)} zip files in Google Drive")
+        all_files = results.get('files', [])
+        
+        # Filter by pattern if provided (do this in Python for better pattern matching)
+        if pattern:
+            import fnmatch
+            filtered_files = []
+            for file_info in all_files:
+                file_name = file_info.get('name', '')
+                # Use fnmatch for proper wildcard matching
+                if fnmatch.fnmatch(file_name.lower(), pattern.lower()):
+                    filtered_files.append(file_info)
+            files = filtered_files
+            logger.info(f"Found {len(files)} zip files matching pattern '{pattern}' (out of {len(all_files)} total zip files)")
+        else:
+            files = all_files
+            logger.info(f"Found {len(files)} zip files in Google Drive")
+        
+        # Log file names for debugging
+        if files:
+            logger.info("Files to download:")
+            for file_info in files[:10]:  # Show first 10
+                logger.info(f"  - {file_info.get('name')} ({file_info.get('size', 0) / 1024 / 1024:.1f} MB)")
+            if len(files) > 10:
+                logger.info(f"  ... and {len(files) - 10} more files")
         
         return files
     
