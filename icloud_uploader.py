@@ -4,7 +4,7 @@ Upload media files to iCloud Photos using pyicloud library.
 import logging
 import time
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Callable
 from pyicloud import PyiCloudService
 from pyicloud.exceptions import PyiCloudFailedLoginException, PyiCloud2SARequiredException
 from tqdm import tqdm
@@ -22,13 +22,21 @@ class iCloudUploader:
         
         Args:
             apple_id: Apple ID email
-            password: Apple ID password
+            password: Apple ID password (empty string will prompt)
             trusted_device_id: Optional trusted device ID for 2FA
         """
         self.apple_id = apple_id
-        self.password = password
+        self.password = password.strip() if password else ''
         self.trusted_device_id = trusted_device_id
         self.api = None
+        
+        # Prompt for password if empty
+        if not self.password:
+            import getpass
+            logger.info("iCloud password not provided. Please enter your Apple ID password:")
+            logger.info("(Note: If you have 2FA enabled, use your regular password)")
+            self.password = getpass.getpass("Password: ")
+        
         self._authenticate()
     
     def _authenticate(self):
@@ -43,28 +51,49 @@ class iCloudUploader:
                 if self.trusted_device_id:
                     # Use trusted device
                     device = self.api.trusted_devices[int(self.trusted_device_id)]
+                    device_name = device.get('deviceName', 'Unknown')
+                    logger.info(f"Using trusted device: {device_name}")
                     if not self.api.send_verification_code(device):
                         raise Exception("Failed to send verification code")
-                    
-                    code = input("Enter 2FA code: ")
-                    if not self.api.validate_verification_code(device, code):
-                        raise Exception("Invalid verification code")
+                    logger.info(f"Verification code sent to {device_name}")
                 else:
                     # List available devices
                     devices = self.api.trusted_devices
                     logger.info("Available trusted devices:")
                     for i, device in enumerate(devices):
-                        logger.info(f"  {i}: {device.get('deviceName', 'Unknown')}")
+                        device_name = device.get('deviceName', 'Unknown')
+                        device_type = device.get('deviceType', 'Unknown')
+                        logger.info(f"  {i}: {device_name} ({device_type})")
                     
-                    device_index = input("Select device (enter number): ")
+                    device_index = input("Select device (enter number): ").strip()
                     device = devices[int(device_index)]
+                    device_name = device.get('deviceName', 'Unknown')
                     
                     if not self.api.send_verification_code(device):
                         raise Exception("Failed to send verification code")
+                    logger.info(f"Verification code sent to {device_name}")
+                
+                # Allow retries for 2FA code
+                max_attempts = 3
+                for attempt in range(max_attempts):
+                    code = input(f"Enter 2FA code (attempt {attempt + 1}/{max_attempts}): ").strip()
+                    # Remove any spaces or dashes from the code
+                    code = code.replace(' ', '').replace('-', '')
                     
-                    code = input("Enter 2FA code: ")
-                    if not self.api.validate_verification_code(device, code):
-                        raise Exception("Invalid verification code")
+                    if self.api.validate_verification_code(device, code):
+                        logger.info("✓ Verification code accepted")
+                        break
+                    else:
+                        if attempt < max_attempts - 1:
+                            logger.warning("Invalid verification code. Please try again.")
+                            logger.info("Note: Codes expire quickly. You may need to request a new code.")
+                            retry = input("Request new code? (y/n): ").strip().lower()
+                            if retry == 'y':
+                                if not self.api.send_verification_code(device):
+                                    raise Exception("Failed to send new verification code")
+                                logger.info("New verification code sent")
+                        else:
+                            raise Exception("Invalid verification code after multiple attempts")
             
             logger.info("Successfully authenticated with iCloud")
             
@@ -125,14 +154,45 @@ class iCloudUploader:
             logger.error(f"Failed to upload photo {photo_path.name}: {e}")
             return False
     
+    def verify_file_uploaded(self, file_path: Path) -> bool:
+        """
+        Verify that a file was successfully uploaded to iCloud Photos.
+        
+        Note: This is a placeholder as direct API upload may not be supported.
+        For actual verification, you may need to query the iCloud Photos API.
+        
+        Args:
+            file_path: Path to the original file
+        
+        Returns:
+            True if file is verified to be uploaded, False otherwise
+        """
+        try:
+            # Since direct API upload may not be supported, verification is limited
+            # In a real implementation, you would query the iCloud Photos API
+            # to check if the file exists
+            
+            # For now, if upload_photo returned True, we assume it's uploaded
+            # This is a placeholder - actual verification would require API query
+            logger.debug(f"Verification not fully supported for API uploader: {file_path.name}")
+            return False
+            
+        except Exception as e:
+            logger.debug(f"Error verifying file {file_path.name}: {e}")
+            return False
+    
     def upload_photos_batch(self, photo_paths: List[Path], 
-                           album_name: Optional[str] = None) -> Dict[Path, bool]:
+                           album_name: Optional[str] = None,
+                           verify_after_upload: bool = True,
+                           on_verification_failure: Optional[Callable[[Path], None]] = None) -> Dict[Path, bool]:
         """
         Upload multiple photos in a batch.
         
         Args:
             photo_paths: List of photo file paths
             album_name: Optional album name to add photos to
+            verify_after_upload: If True, verify each file after upload
+            on_verification_failure: Optional callback function(file_path) called when verification fails
         
         Returns:
             Dictionary mapping file paths to success status
@@ -141,6 +201,16 @@ class iCloudUploader:
         
         for photo_path in tqdm(photo_paths, desc=f"Uploading photos"):
             success = self.upload_photo(photo_path)
+            
+            # Verify upload if requested
+            if success and verify_after_upload:
+                verified = self.verify_file_uploaded(photo_path)
+                if not verified:
+                    logger.warning(f"Upload verification failed for {photo_path.name}")
+                    if on_verification_failure:
+                        on_verification_failure(photo_path)
+                    success = False
+            
             results[photo_path] = success
             
             # Rate limiting
@@ -251,14 +321,71 @@ class iCloudPhotosSyncUploader:
             logger.error(f"Failed to copy {file_path.name}: {e}")
             return False
     
+    def verify_file_uploaded(self, file_path: Path) -> bool:
+        """
+        Verify that a file was successfully uploaded to iCloud Photos.
+        
+        For sync method, this checks if the file exists in the Photos library.
+        
+        Args:
+            file_path: Path to the original file
+        
+        Returns:
+            True if file is verified to be uploaded, False otherwise
+        """
+        try:
+            from datetime import datetime
+            
+            # Try to get date from file metadata to find target location
+            try:
+                from PIL import Image
+                from PIL.ExifTags import DATETIME
+                
+                img = Image.open(file_path)
+                exif = img._getexif()
+                if exif:
+                    date_str = exif.get(DATETIME)
+                    if date_str:
+                        dt = datetime.strptime(date_str, "%Y:%m:%d %H:%M:%S")
+                        year = dt.year
+                        month = dt.month
+                    else:
+                        year = datetime.now().year
+                        month = datetime.now().month
+                else:
+                    year = datetime.now().year
+                    month = datetime.now().month
+            except:
+                year = datetime.now().year
+                month = datetime.now().month
+            
+            # Check if file exists in Photos library
+            target_dir = self.masters_path / str(year) / f"{month:02d}"
+            target_path = target_dir / file_path.name
+            
+            if target_path.exists():
+                # Also verify file size matches (basic integrity check)
+                if target_path.stat().st_size == file_path.stat().st_size:
+                    return True
+            
+            return False
+            
+        except Exception as e:
+            logger.debug(f"Error verifying file {file_path.name}: {e}")
+            return False
+    
     def upload_files_batch(self, file_paths: List[Path],
-                          albums: Optional[Dict[Path, str]] = None) -> Dict[Path, bool]:
+                          albums: Optional[Dict[Path, str]] = None,
+                          verify_after_upload: bool = True,
+                          on_verification_failure: Optional[Callable[[Path], None]] = None) -> Dict[Path, bool]:
         """
         Upload multiple files in a batch.
         
         Args:
             file_paths: List of file paths
             albums: Optional mapping of files to album names
+            verify_after_upload: If True, verify each file after upload
+            on_verification_failure: Optional callback function(file_path) called when verification fails
         
         Returns:
             Dictionary mapping file paths to success status
@@ -268,6 +395,16 @@ class iCloudPhotosSyncUploader:
         for file_path in tqdm(file_paths, desc="Copying to Photos library"):
             album_name = albums.get(file_path) if albums else None
             success = self.upload_file(file_path, album_name)
+            
+            # Verify upload if requested
+            if success and verify_after_upload:
+                verified = self.verify_file_uploaded(file_path)
+                if not verified:
+                    logger.warning(f"Upload verification failed for {file_path.name}")
+                    if on_verification_failure:
+                        on_verification_failure(file_path)
+                    success = False
+            
             results[file_path] = success
         
         successful = sum(1 for v in results.values() if v)

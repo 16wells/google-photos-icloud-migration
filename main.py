@@ -2,6 +2,7 @@
 Main orchestration script for Google Photos to iCloud Photos migration.
 """
 import argparse
+import json
 import logging
 import sys
 from pathlib import Path
@@ -18,6 +19,11 @@ from icloud_uploader import iCloudUploader, iCloudPhotosSyncUploader
 logger = logging.getLogger(__name__)
 
 
+class MigrationStoppedException(Exception):
+    """Exception raised when user chooses to stop migration."""
+    pass
+
+
 class MigrationOrchestrator:
     """Orchestrates the entire migration process."""
     
@@ -28,6 +34,7 @@ class MigrationOrchestrator:
         Args:
             config_path: Path to configuration YAML file
         """
+        self.config_path = config_path
         self.config = self._load_config(config_path)
         self._setup_logging()
         
@@ -55,6 +62,12 @@ class MigrationOrchestrator:
         
         # Initialize iCloud uploader (will be set up later)
         self.icloud_uploader = None
+        
+        # Failed uploads tracking
+        self.failed_uploads_file = self.base_dir / 'failed_uploads.json'
+        
+        # Verification failure handling
+        self.ignore_all_verification_failures = False
     
     def _load_config(self, config_path: str) -> Dict:
         """Load configuration from YAML file."""
@@ -67,13 +80,33 @@ class MigrationOrchestrator:
         level = getattr(logging, log_config.get('level', 'INFO'))
         log_file = log_config.get('file', 'migration.log')
         
+        class SafeFileHandler(logging.FileHandler):
+            """File handler that gracefully handles disk space errors."""
+            def emit(self, record):
+                try:
+                    super().emit(record)
+                except OSError as e:
+                    if e.errno == 28:  # No space left on device
+                        # Silently skip logging to file if disk is full
+                        pass
+                    else:
+                        raise
+        
+        handlers = [logging.StreamHandler(sys.stdout)]
+        
+        # Try to add file handler, but don't fail if disk is full
+        try:
+            file_handler = SafeFileHandler(log_file)
+            handlers.append(file_handler)
+        except (OSError, IOError) as e:
+            # If we can't create log file (e.g., no disk space), just use console
+            print(f"Warning: Could not create log file '{log_file}': {e}", file=sys.stderr)
+            print("Continuing with console logging only.", file=sys.stderr)
+        
         logging.basicConfig(
             level=level,
             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-            handlers=[
-                logging.FileHandler(log_file),
-                logging.StreamHandler(sys.stdout)
-            ]
+            handlers=handlers
         )
     
     def download_zip_files(self) -> List[Path]:
@@ -208,9 +241,17 @@ class MigrationOrchestrator:
         if use_sync_method:
             self.icloud_uploader = iCloudPhotosSyncUploader()
         else:
+            password = icloud_config.get('password', '').strip()
+            # Prompt for password if empty
+            if not password:
+                import getpass
+                logger.info("iCloud password not set in config. Please enter your Apple ID password:")
+                logger.info("(Note: If you have 2FA enabled, use your regular password and you'll be prompted for 2FA code)")
+                password = getpass.getpass("Password: ")
+            
             self.icloud_uploader = iCloudUploader(
                 apple_id=icloud_config['apple_id'],
-                password=icloud_config.get('password', ''),
+                password=password,
                 trusted_device_id=icloud_config.get('trusted_device_id')
             )
     
@@ -239,13 +280,22 @@ class MigrationOrchestrator:
             for file_path in files:
                 file_to_album[file_path] = album_name
         
+        # Create verification failure callback
+        def verification_failure_callback(failed_file_path: Path):
+            """Callback for handling verification failures."""
+            action = self._handle_verification_failure(failed_file_path)
+            if action == 'stop':
+                raise MigrationStoppedException(f"Migration stopped by user due to verification failure for {failed_file_path.name}")
+        
         # Upload files
         all_files = list(media_json_pairs.keys())
         
         if isinstance(self.icloud_uploader, iCloudPhotosSyncUploader):
             results = self.icloud_uploader.upload_files_batch(
                 all_files,
-                albums=file_to_album
+                albums=file_to_album,
+                verify_after_upload=True,
+                on_verification_failure=verification_failure_callback
             )
         else:
             # Group by album for regular uploader
@@ -254,12 +304,218 @@ class MigrationOrchestrator:
                 logger.info(f"Uploading album: {album_name} ({len(files)} files)")
                 album_results = self.icloud_uploader.upload_photos_batch(
                     files,
-                    album_name=album_name
+                    album_name=album_name,
+                    verify_after_upload=True,
+                    on_verification_failure=verification_failure_callback
                 )
                 results.update(album_results)
         
         successful = sum(1 for v in results.values() if v)
+        failed_count = len(results) - successful
         logger.info(f"Uploaded {successful}/{len(results)} files to iCloud Photos")
+        
+        # Save failed uploads for retry
+        if failed_count > 0:
+            failed_files = [str(path) for path, success in results.items() if not success]
+            self._save_failed_uploads(failed_files, albums)
+            logger.warning("=" * 60)
+            logger.warning(f"⚠️  {failed_count} files failed to upload")
+            logger.warning(f"Failed uploads saved to: {self.failed_uploads_file}")
+            logger.warning("You can retry failed uploads using: --retry-failed")
+            logger.warning("=" * 60)
+        
+        return results
+    
+    def _handle_verification_failure(self, file_path: Path) -> str:
+        """
+        Handle verification failure by prompting the user.
+        
+        Args:
+            file_path: Path to the file that failed verification
+        
+        Returns:
+            'stop', 'continue', or 'ignore_all'
+        """
+        if self.ignore_all_verification_failures:
+            return 'ignore_all'
+        
+        logger.warning("=" * 60)
+        logger.warning(f"⚠️  Upload verification failed for: {file_path.name}")
+        logger.warning("=" * 60)
+        logger.warning("The file may not have been successfully uploaded to iCloud.")
+        logger.warning("")
+        logger.warning("What would you like to do?")
+        logger.warning("  (A) Stop - Stop processing and exit")
+        logger.warning("  (B) Continue - Continue processing remaining files")
+        logger.warning("  (I) Ignore all - Ignore all future verification failures and continue")
+        logger.warning("")
+        
+        while True:
+            choice = input("Enter your choice (A/B/I): ").strip().upper()
+            if choice == 'A':
+                logger.info("Stopping migration as requested.")
+                return 'stop'
+            elif choice == 'B':
+                logger.info("Continuing with remaining files.")
+                return 'continue'
+            elif choice == 'I':
+                logger.info("Ignoring all future verification failures.")
+                self.ignore_all_verification_failures = True
+                return 'ignore_all'
+            else:
+                logger.warning("Invalid choice. Please enter A, B, or I.")
+    
+    def _save_failed_uploads(self, failed_files: List[str], albums: Dict[Path, str]):
+        """
+        Save failed uploads to a JSON file for later retry.
+        
+        Args:
+            failed_files: List of file paths (as strings) that failed to upload
+            albums: Dictionary mapping file paths to album names
+        """
+        # Load existing failed uploads
+        existing_failed = {}
+        if self.failed_uploads_file.exists():
+            try:
+                with open(self.failed_uploads_file, 'r') as f:
+                    existing_failed = json.load(f)
+            except (json.JSONDecodeError, IOError) as e:
+                logger.warning(f"Could not read existing failed uploads file: {e}")
+                existing_failed = {}
+        
+        # Add new failed files
+        for file_path_str in failed_files:
+            file_path = Path(file_path_str)
+            album_name = albums.get(file_path, '')
+            existing_failed[file_path_str] = {
+                'file': file_path_str,
+                'album': album_name,
+                'retry_count': existing_failed.get(file_path_str, {}).get('retry_count', 0)
+            }
+        
+        # Save updated failed uploads
+        try:
+            with open(self.failed_uploads_file, 'w') as f:
+                json.dump(existing_failed, f, indent=2)
+        except IOError as e:
+            logger.error(f"Could not save failed uploads file: {e}")
+    
+    def retry_failed_uploads(self, use_sync_method: bool = False) -> Dict[Path, bool]:
+        """
+        Retry uploading files that previously failed.
+        
+        Args:
+            use_sync_method: Whether to use Photos library sync method
+            
+        Returns:
+            Dictionary mapping file paths to upload success status
+        """
+        if not self.failed_uploads_file.exists():
+            logger.info("No failed uploads file found. Nothing to retry.")
+            return {}
+        
+        logger.info("=" * 60)
+        logger.info("Retrying failed uploads")
+        logger.info("=" * 60)
+        
+        # Load failed uploads
+        try:
+            with open(self.failed_uploads_file, 'r') as f:
+                failed_data = json.load(f)
+        except (json.JSONDecodeError, IOError) as e:
+            logger.error(f"Could not read failed uploads file: {e}")
+            return {}
+        
+        if not failed_data:
+            logger.info("No failed uploads to retry.")
+            return {}
+        
+        logger.info(f"Found {len(failed_data)} files to retry")
+        
+        # Setup uploader if needed
+        if self.icloud_uploader is None:
+            self.setup_icloud_uploader(use_sync_method=use_sync_method)
+        
+        # Group files by album
+        files_by_album: Dict[str, List[Path]] = {}
+        for file_data in failed_data.values():
+            file_path = Path(file_data['file'])
+            album_name = file_data.get('album', '')
+            
+            if not file_path.exists():
+                logger.warning(f"File no longer exists: {file_path}")
+                continue
+            
+            if album_name not in files_by_album:
+                files_by_album[album_name] = []
+            files_by_album[album_name].append(file_path)
+        
+        # Upload files
+        results = {}
+        file_to_album = {}
+        for album_name, files in files_by_album.items():
+            for file_path in files:
+                file_to_album[file_path] = album_name
+        
+        # Create verification failure callback
+        def verification_failure_callback(failed_file_path: Path):
+            """Callback for handling verification failures."""
+            action = self._handle_verification_failure(failed_file_path)
+            if action == 'stop':
+                raise MigrationStoppedException(f"Migration stopped by user due to verification failure for {failed_file_path.name}")
+        
+        all_files = [f for files in files_by_album.values() for f in files]
+        
+        if isinstance(self.icloud_uploader, iCloudPhotosSyncUploader):
+            results = self.icloud_uploader.upload_files_batch(
+                all_files,
+                albums=file_to_album,
+                verify_after_upload=True,
+                on_verification_failure=verification_failure_callback
+            )
+        else:
+            # Group by album for regular uploader
+            for album_name, files in files_by_album.items():
+                logger.info(f"Retrying album: {album_name} ({len(files)} files)")
+                album_results = self.icloud_uploader.upload_photos_batch(
+                    files,
+                    album_name=album_name,
+                    verify_after_upload=True,
+                    on_verification_failure=verification_failure_callback
+                )
+                results.update(album_results)
+        
+        # Update failed uploads file (remove successful ones)
+        successful_files = {str(path) for path, success in results.items() if success}
+        remaining_failed = {
+            k: v for k, v in failed_data.items() 
+            if k not in successful_files
+        }
+        
+        # Increment retry count for still-failed files
+        for file_path_str in remaining_failed:
+            remaining_failed[file_path_str]['retry_count'] = \
+                remaining_failed[file_path_str].get('retry_count', 0) + 1
+        
+        # Save updated failed uploads
+        try:
+            with open(self.failed_uploads_file, 'w') as f:
+                json.dump(remaining_failed, f, indent=2)
+        except IOError as e:
+            logger.error(f"Could not update failed uploads file: {e}")
+        
+        successful = sum(1 for v in results.values() if v)
+        logger.info(f"Retried: {successful}/{len(results)} files succeeded")
+        
+        if len(remaining_failed) > 0:
+            logger.warning(f"⚠️  {len(remaining_failed)} files still failed after retry")
+            logger.warning(f"Failed uploads saved to: {self.failed_uploads_file}")
+        else:
+            logger.info("✓ All failed uploads have been successfully retried!")
+            # Optionally remove the failed uploads file if all succeeded
+            if successful == len(results):
+                self.failed_uploads_file.unlink()
+                logger.info("Removed failed uploads file (all uploads succeeded)")
         
         return results
     
@@ -345,11 +601,20 @@ class MigrationOrchestrator:
                 else:
                     processed_files.append(media_file)
             
+            # Create verification failure callback
+            def verification_failure_callback(failed_file_path: Path):
+                """Callback for handling verification failures."""
+                action = self._handle_verification_failure(failed_file_path)
+                if action == 'stop':
+                    raise RuntimeError(f"Migration stopped by user due to verification failure for {failed_file_path.name}")
+            
             # Upload
             if isinstance(self.icloud_uploader, iCloudPhotosSyncUploader):
                 upload_results = self.icloud_uploader.upload_files_batch(
                     processed_files,
-                    albums=file_to_album
+                    albums=file_to_album,
+                    verify_after_upload=True,
+                    on_verification_failure=verification_failure_callback
                 )
             else:
                 # Group by album
@@ -362,66 +627,190 @@ class MigrationOrchestrator:
                         logger.info(f"Uploading album: {album_name} ({len(processed_album_files)} files)")
                         album_results = self.icloud_uploader.upload_photos_batch(
                             processed_album_files,
-                            album_name=album_name
+                            album_name=album_name,
+                            verify_after_upload=True,
+                            on_verification_failure=verification_failure_callback
                         )
                         upload_results.update(album_results)
             
             successful = sum(1 for v in upload_results.values() if v)
+            failed_count = len(upload_results) - successful
             logger.info(f"Uploaded {successful}/{len(upload_results)} files from {zip_path.name}")
+            
+            # Save failed uploads for retry
+            if failed_count > 0:
+                failed_files = [str(path) for path, success in upload_results.items() if not success]
+                self._save_failed_uploads(failed_files, file_to_album)
+                logger.warning(f"⚠️  {failed_count} files from {zip_path.name} failed to upload")
+                logger.warning(f"Failed uploads saved to: {self.failed_uploads_file}")
             
             # Cleanup extracted files for this zip (save disk space)
             import shutil
             if extracted_dir.exists():
                 logger.info(f"Cleaning up extracted files for {zip_path.name}")
                 shutil.rmtree(extracted_dir)
+                logger.info(f"✓ Cleaned up extracted files for {zip_path.name}")
             
             logger.info(f"✓ Completed processing {zip_path.name}")
             return True
             
+        except MigrationStoppedException:
+            # Re-raise to stop migration
+            raise
         except Exception as e:
             logger.error(f"Failed to process {zip_path.name}: {e}", exc_info=True)
             return False
     
-    def run(self, use_sync_method: bool = False):
-        """Run the complete migration process."""
+    def _find_existing_zips(self, zip_dir: Path, zip_file_list: List[dict]) -> List[Path]:
+        """
+        Find zip files that are already downloaded locally.
+        
+        Args:
+            zip_dir: Directory containing zip files
+            zip_file_list: List of zip file metadata from Google Drive
+        
+        Returns:
+            List of paths to existing zip files
+        """
+        existing_zips = []
+        zip_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Create a set of expected zip file names for quick lookup
+        expected_names = {file_info['name'] for file_info in zip_file_list}
+        
+        # Find matching zip files in the directory
+        for zip_file in zip_dir.glob("*.zip"):
+            if zip_file.name in expected_names:
+                existing_zips.append(zip_file)
+        
+        return sorted(existing_zips)  # Sort for consistent processing order
+    
+    def run(self, use_sync_method: bool = False, retry_failed: bool = False):
+        """
+        Run the complete migration process.
+        
+        Args:
+            use_sync_method: Whether to use Photos library sync method
+            retry_failed: If True, only retry previously failed uploads
+        """
+        # If retry mode, just retry failed uploads and exit
+        if retry_failed:
+            self.setup_icloud_uploader(use_sync_method=use_sync_method)
+            self.retry_failed_uploads(use_sync_method=use_sync_method)
+            return
+        
         try:
-            # Phase 1: Download all zip files (but don't extract yet)
+            # Phase 1: List all zip files (without downloading yet)
             logger.info("=" * 60)
-            logger.info("Phase 1: Downloading zip files from Google Drive")
+            logger.info("Phase 1: Listing zip files from Google Drive")
             logger.info("=" * 60)
             
             drive_config = self.config['google_drive']
             zip_dir = self.base_dir / self.config['processing']['zip_dir']
             
-            zip_files = self.downloader.download_all_zips(
-                destination_dir=zip_dir,
+            # List files without downloading
+            zip_file_list = self.downloader.list_zip_files(
                 folder_id=drive_config.get('folder_id') or None,
                 pattern=drive_config.get('zip_file_pattern') or None
             )
             
-            if not zip_files:
+            if not zip_file_list:
                 logger.error("No zip files found. Exiting.")
                 return
             
-            logger.info(f"Downloaded {len(zip_files)} zip files")
+            # Check for already-downloaded zip files
+            existing_zips = self._find_existing_zips(zip_dir, zip_file_list)
+            
+            if existing_zips:
+                total_size_gb = sum(f.stat().st_size for f in existing_zips) / (1024 ** 3)
+                logger.info("")
+                logger.info("=" * 60)
+                logger.info(f"Found {len(existing_zips)} already-downloaded zip files ({total_size_gb:.2f} GB)")
+                logger.info("These will be processed FIRST to free up disk space")
+                logger.info("=" * 60)
+                logger.info("")
+            
+            logger.info(f"Found {len(zip_file_list)} zip files total to process")
             logger.info("")
-            logger.info("Now processing each zip file individually:")
-            logger.info("  - Extract → Process metadata → Upload → Cleanup")
+            logger.info("Processing each zip file individually:")
+            logger.info("  - Download → Extract → Process metadata → Upload → Cleanup")
+            logger.info("  (This approach minimizes disk space usage)")
             logger.info("")
             
             # Setup iCloud uploader once (before processing zips)
             self.setup_icloud_uploader(use_sync_method=use_sync_method)
             
-            # Process each zip file one at a time
             successful = 0
             failed = 0
+            total_zips = len(zip_file_list)
+            processed_count = 0
             
-            for i, zip_file in enumerate(zip_files, 1):
-                if self.process_single_zip(zip_file, i, len(zip_files), use_sync_method):
-                    successful += 1
-                else:
+            # FIRST: Process already-downloaded zip files to free up space
+            for existing_zip in existing_zips:
+                processed_count += 1
+                try:
+                    logger.info("=" * 60)
+                    logger.info(f"Processing existing zip {processed_count}/{total_zips}: {existing_zip.name}")
+                    logger.info("=" * 60)
+                    
+                    # Process this zip file
+                    if self.process_single_zip(existing_zip, processed_count, total_zips, use_sync_method):
+                        successful += 1
+                        
+                        # Cleanup zip file after successful processing to free up space
+                        logger.info(f"Deleting zip file to free up disk space: {existing_zip.name}")
+                        existing_zip.unlink()
+                        logger.info(f"✓ Deleted {existing_zip.name}")
+                    else:
+                        failed += 1
+                        logger.warning(f"Failed to process {existing_zip.name}, keeping zip file for retry")
+                        
+                except MigrationStoppedException as e:
+                    logger.info("Migration stopped by user.")
+                    logger.info(f"Reason: {e}")
+                    return
+                except Exception as e:
                     failed += 1
-                    logger.warning(f"Skipping remaining processing for {zip_file.name}")
+                    logger.error(f"Error processing {existing_zip.name}: {e}", exc_info=True)
+                    logger.warning(f"Skipping remaining processing for {existing_zip.name}")
+            
+            # THEN: Download and process remaining zip files
+            for file_info in zip_file_list:
+                zip_file_path = zip_dir / file_info['name']
+                
+                # Skip if we already processed this file (or it failed)
+                if zip_file_path.exists():
+                    continue
+                
+                processed_count += 1
+                try:
+                    # Download this zip file
+                    logger.info("=" * 60)
+                    logger.info(f"Downloading zip {processed_count}/{total_zips}: {file_info['name']}")
+                    logger.info("=" * 60)
+                    
+                    zip_file = self.downloader.download_single_zip(file_info, zip_dir)
+                    
+                    # Process this zip file
+                    if self.process_single_zip(zip_file, processed_count, total_zips, use_sync_method):
+                        successful += 1
+                        
+                        # Cleanup zip file after successful processing to free up space
+                        logger.info(f"Deleting zip file to free up disk space: {zip_file.name}")
+                        zip_file.unlink()
+                        logger.info(f"✓ Deleted {zip_file.name}")
+                    else:
+                        failed += 1
+                        logger.warning(f"Failed to process {zip_file.name}, keeping zip file for retry")
+                        
+                except MigrationStoppedException as e:
+                    logger.info("Migration stopped by user.")
+                    logger.info(f"Reason: {e}")
+                    return
+                except Exception as e:
+                    failed += 1
+                    logger.error(f"Error processing {file_info.get('name', 'unknown')}: {e}", exc_info=True)
+                    logger.warning(f"Skipping remaining processing for {file_info.get('name', 'unknown')}")
             
             # Final cleanup
             if self.config['processing'].get('cleanup_after_upload', False):
@@ -434,11 +823,20 @@ class MigrationOrchestrator:
                     logger.info(f"Removing processed files: {processed_dir}")
                     shutil.rmtree(processed_dir)
             
+            # Check for failed uploads
+            failed_uploads_exist = self.failed_uploads_file.exists() and self.failed_uploads_file.stat().st_size > 0
+            
             logger.info("=" * 60)
             logger.info(f"Migration completed!")
-            logger.info(f"  Successful: {successful}/{len(zip_files)} zip files")
+            logger.info(f"  Successful: {successful}/{len(zip_file_list)} zip files")
             if failed > 0:
-                logger.info(f"  Failed: {failed}/{len(zip_files)} zip files")
+                logger.info(f"  Failed: {failed}/{len(zip_file_list)} zip files")
+            if failed_uploads_exist:
+                logger.info("")
+                logger.warning("⚠️  Some files failed to upload to iCloud")
+                logger.warning(f"Failed uploads saved to: {self.failed_uploads_file}")
+                logger.warning("To retry failed uploads, run:")
+                logger.warning(f"  python main.py --config {self.config_path} --retry-failed")
             logger.info("=" * 60)
             
         except Exception as e:
@@ -462,11 +860,16 @@ def main():
         action='store_true',
         help='Use Photos library sync method instead of API upload'
     )
+    parser.add_argument(
+        '--retry-failed',
+        action='store_true',
+        help='Retry previously failed uploads (skips download/extract/process steps)'
+    )
     
     args = parser.parse_args()
     
     orchestrator = MigrationOrchestrator(args.config)
-    orchestrator.run(use_sync_method=args.use_sync)
+    orchestrator.run(use_sync_method=args.use_sync, retry_failed=args.retry_failed)
 
 
 if __name__ == '__main__':
