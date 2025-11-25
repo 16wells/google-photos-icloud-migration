@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>iCloud Authentication</h1>
+<p>Please enter your Apple ID credentials to access iCloud Photos.</p>
+
+<form id="icloud-form" onsubmit="submitLogin(event)">
+    <div class="step">
+        <label for="apple_id">Apple ID (Email):</label>
+        <input type="email" id="apple_id" name="apple_id" required>
+        
+        <label for="password">Password:</label>
+        <input type="password" id="password" name="password" required>
+        
+        <button type="submit">Sign In</button>
+    </div>
+</form>
+
+<div id="2fa-section" style="display:none;">
+    <h2>Two-Factor Authentication</h2>
+    <p>Select a trusted device to receive the verification code:</p>
+    <div id="devices-list"></div>
+    <label for="code">Verification Code:</label>
+    <input type="text" id="code" name="code" maxlength="6">
+    <button onclick="submit2FA()">Verify</button>
+</div>
+
+<div id="status-message"></div>
+
+<script>
+function submitLogin(event) {
+    event.preventDefault();
+    const formData = new FormData(event.target);
+    
+    fetch('/auth/icloud', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.requires_2fa) {
+            document.getElementById('icloud-form').style.display = 'none';
+            document.getElementById('2fa-section').style.display = 'block';
+            
+            const devicesList = document.getElementById('devices-list');
+            devicesList.innerHTML = '';
+            data.devices.forEach(device => {
+                const button = document.createElement('button');
+                button.textContent = device.name;
+                button.onclick = () => selectDevice(device.id);
+                devicesList.appendChild(button);
+            });
+        } else if (data.success) {
+            window.location.href = '/migration/setup';
+        } else {
+            showMessage(data.error || 'Authentication failed', 'error');
+        }
+    })
+    .catch(error => {
+        showMessage('Error: ' + error.message, 'error');
+    });
+}
+
+let selectedDeviceId = null;
+
+function selectDevice(deviceId) {
+    selectedDeviceId = deviceId;
+    document.querySelectorAll('#devices-list button').forEach(btn => {
+        btn.style.background = '#4285f4';
+    });
+    event.target.style.background = '#34a853';
+}
+
+function submit2FA() {
+    const code = document.getElementById('code').value;
+    if (!selectedDeviceId || !code) {
+        showMessage('Please select a device and enter the code', 'error');
+        return;
+    }
+    
+    fetch('/auth/icloud/2fa', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({device_id: selectedDeviceId, code: code})
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            window.location.href = '/migration/setup';
+        } else {
+            showMessage(data.error || 'Verification failed', 'error');
+        }
+    });
+}
+
+function showMessage(message, type) {
+    const statusDiv = document.getElementById('status-message');
+    statusDiv.textContent = message;
+    statusDiv.className = type;
+    statusDiv.style.display = 'block';
+}
+</script>
+{% endblock %}
+

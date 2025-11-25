@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Google Photos to iCloud Migration</h1>
+<p>Welcome! This tool will help you migrate your Google Photos to iCloud Photos.</p>
+
+<div class="step">
+    <h2>Step 1: Authenticate with Google Drive</h2>
+    <p>Connect your Google account to access your Google Takeout zip files.</p>
+    <a href="{{ url_for('auth.google_auth') }}">
+        <button>Connect Google Drive</button>
+    </a>
+</div>
+
+<div class="step">
+    <h2>Step 2: Authenticate with iCloud</h2>
+    <p>Sign in with your Apple ID to upload photos to iCloud Photos.</p>
+    <a href="{{ url_for('auth.icloud_auth') }}">
+        <button>Sign in to iCloud</button>
+    </a>
+</div>
+
+<div class="step">
+    <h2>Step 3: Start Migration</h2>
+    <p>Once authenticated, configure and start your migration.</p>
+    <a href="{{ url_for('migration.setup') }}">
+        <button disabled>Start Migration</button>
+    </a>
+</div>
+{% endblock %}
+
