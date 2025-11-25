@@ -56,19 +56,29 @@ class DriveDownloader:
                     logger.info("=" * 60)
                     logger.info("Running in headless mode - Manual authorization required")
                     logger.info("=" * 60)
-                    # Use out-of-band redirect URI for headless/console mode
-                    flow.redirect_uri = 'urn:ietf:wg:oauth:2.0:oob'
-                    auth_url, _ = flow.authorization_url(prompt='consent')
+                    # For Desktop apps, use localhost redirect but handle manually
+                    # Set redirect_uri to localhost (works with Desktop app OAuth clients)
+                    flow.redirect_uri = 'http://localhost:8080/'
+                    auth_url, _ = flow.authorization_url(prompt='consent', access_type='offline')
                     logger.info("")
                     logger.info("Please visit this URL to authorize the application:")
                     logger.info("")
                     logger.info(auth_url)
                     logger.info("")
-                    logger.info("After authorizing, you will see a code.")
-                    logger.info("Copy that code and paste it here:")
+                    logger.info("After authorizing, Google will try to redirect to localhost.")
+                    logger.info("Since localhost won't work, look for the 'code' parameter in the URL.")
+                    logger.info("The URL will look like: http://localhost:8080/?code=XXXXX&scope=...")
                     logger.info("")
-                    code = input("Enter the authorization code: ").strip()
-                    flow.fetch_token(code=code)
+                    logger.info("Copy the ENTIRE redirect URL (even though it shows localhost)")
+                    logger.info("and paste it here:")
+                    logger.info("")
+                    authorization_response = input("Enter the authorization response URL: ").strip()
+                    # Parse the code from the URL if needed
+                    if 'code=' in authorization_response:
+                        flow.fetch_token(authorization_response=authorization_response)
+                    else:
+                        # If just code was provided
+                        flow.fetch_token(code=authorization_response)
                     creds = flow.credentials
                 else:
                     creds = flow.run_local_server(port=0)
