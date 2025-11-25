@@ -89,8 +89,48 @@ gcloud compute scp setup.sh photos-migration-vm:~/
 ### Option C: Git Clone (if you have the code in a repo)
 
 ```bash
-git clone YOUR_REPO_URL
-cd google-photos-to-icloud-migration
+git clone https://github.com/16wells/google-photos-icloud-migration.git
+cd google-photos-icloud-migration
+```
+
+## Verifying Files on the VM
+
+After uploading files, verify they're on the VM:
+
+### Via SSH (Browser Terminal):
+```bash
+# List files in home directory
+ls -la
+
+# Check project directory
+ls -la ~/google-photos-to-icloud-migration/
+# or if cloned to Sites:
+ls -la ~/Sites/google-photos-to-icloud-migration/
+
+# Verify specific files exist
+ls -la credentials.json config.yaml *.py
+
+# Check file contents
+cat config.yaml
+head -20 main.py
+```
+
+### Via gcloud CLI (from local machine):
+```bash
+# List files on VM
+gcloud compute ssh photos-migration-vm --zone=YOUR_ZONE --command="ls -la"
+
+# Check specific directory
+gcloud compute ssh photos-migration-vm --zone=YOUR_ZONE --command="ls -la ~/google-photos-to-icloud-migration/"
+
+# Download a file to verify (optional)
+gcloud compute scp photos-migration-vm:~/config.yaml ./downloaded-config.yaml --zone=YOUR_ZONE
+```
+
+### Check Upload Logs:
+```bash
+# Via SSH, check if files were uploaded successfully
+gcloud compute ssh photos-migration-vm --zone=YOUR_ZONE --command="df -h"
 ```
 
 ## Step 7: Install Dependencies
@@ -205,6 +245,33 @@ If iCloud authentication times out:
 1. Use trusted device ID in config.yaml
 2. Run interactively and enter 2FA code when prompted
 3. Consider using Photos library sync method (`--use-sync`) if on macOS
+
+## Restarting the VM
+
+To restart your VM instance (useful for running startup scripts):
+
+### Via Google Cloud Console:
+1. Go to Compute Engine > VM instances
+2. Find your VM instance
+3. Click the three dots (⋮) menu
+4. Select "Reset" (hard restart) or "Restart" (soft restart)
+5. Confirm the restart
+
+### Via gcloud CLI:
+```bash
+# Restart the VM (replace with your instance name and zone)
+gcloud compute instances reset photos-migration-vm --zone=YOUR_ZONE
+
+# Find your zone:
+gcloud compute instances list
+```
+
+### Via SSH (from inside the VM):
+```bash
+sudo reboot
+```
+
+**Note:** If you've added a startup script, make sure it's configured in the VM settings before restarting. The startup script runs automatically when the VM boots.
 
 ## Cleanup
 
