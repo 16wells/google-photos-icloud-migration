@@ -1,0 +1,50 @@
+# Google Drive Configuration
+google_drive:
+  # Path to Google Drive API credentials JSON file
+  # Download from: https://console.cloud.google.com/apis/credentials
+  credentials_file: "credentials.json"
+  # Folder ID in Google Drive containing the zip files (optional, leave empty to search)
+  folder_id: ""
+  # Or search by name pattern
+  zip_file_pattern: "takeout-*.zip"
+
+# iCloud Configuration
+icloud:
+  # Apple ID email
+  apple_id: "your-apple-id@example.com"
+  # Password (or leave empty to be prompted)
+  password: ""
+  # Trusted device ID (optional, for 2FA)
+  trusted_device_id: ""
+
+# Processing Configuration
+processing:
+  # Base directory for processing files
+  base_dir: "/tmp/google-photos-migration"
+  # Directory for downloaded zip files
+  zip_dir: "zips"
+  # Directory for extracted files
+  extracted_dir: "extracted"
+  # Directory for processed files (with metadata merged)
+  processed_dir: "processed"
+  # Batch size for processing (number of files to process at once)
+  batch_size: 100
+  # Clean up extracted files after processing
+  cleanup_after_upload: true
+
+# Metadata Configuration
+metadata:
+  # Preserve dates from PhotoTakenTimeTimestamp
+  preserve_dates: true
+  # Preserve GPS coordinates
+  preserve_gps: true
+  # Preserve descriptions
+  preserve_descriptions: true
+  # Preserve album information
+  preserve_albums: true
+
+# Logging Configuration
+logging:
+  level: "INFO"
+  file: "migration.log"
+
