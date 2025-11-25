@@ -69,15 +69,19 @@ class DriveDownloader:
                     logger.info("Since localhost won't work, look for the 'code' parameter in the URL.")
                     logger.info("The URL will look like: http://localhost:8080/?code=XXXXX&scope=...")
                     logger.info("")
-                    logger.info("Copy the ENTIRE redirect URL (even though it shows localhost)")
-                    logger.info("and paste it here:")
+                    logger.info("Copy the ENTIRE redirect URL and paste it here:")
                     logger.info("")
                     authorization_response = input("Enter the authorization response URL: ").strip()
-                    # Parse the code from the URL if needed
-                    if 'code=' in authorization_response:
-                        flow.fetch_token(authorization_response=authorization_response)
+                    # Extract code from URL
+                    from urllib.parse import urlparse, parse_qs
+                    parsed = urlparse(authorization_response)
+                    params = parse_qs(parsed.query)
+                    if 'code' in params:
+                        code = params['code'][0]
+                        logger.info("Extracted authorization code, fetching token...")
+                        flow.fetch_token(code=code)
                     else:
-                        # If just code was provided
+                        # Try as-is if it's already just a code
                         flow.fetch_token(code=authorization_response)
                     creds = flow.credentials
                 else:
