@@ -147,7 +147,13 @@ class DriveDownloader:
         if files:
             logger.info("Files to download:")
             for file_info in files[:10]:  # Show first 10
-                logger.info(f"  - {file_info.get('name')} ({file_info.get('size', 0) / 1024 / 1024:.1f} MB)")
+                size = file_info.get('size', '0')
+                # Convert size to int (Google Drive API returns it as string)
+                try:
+                    size_mb = int(size) / 1024 / 1024
+                    logger.info(f"  - {file_info.get('name')} ({size_mb:.1f} MB)")
+                except (ValueError, TypeError):
+                    logger.info(f"  - {file_info.get('name')} (size unknown)")
             if len(files) > 10:
                 logger.info(f"  ... and {len(files) - 10} more files")
         
