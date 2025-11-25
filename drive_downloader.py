@@ -56,18 +56,19 @@ class DriveDownloader:
                     logger.info("=" * 60)
                     logger.info("Running in headless mode - Manual authorization required")
                     logger.info("=" * 60)
+                    # Use out-of-band redirect URI for headless/console mode
+                    flow.redirect_uri = 'urn:ietf:wg:oauth:2.0:oob'
                     auth_url, _ = flow.authorization_url(prompt='consent')
                     logger.info("")
                     logger.info("Please visit this URL to authorize the application:")
                     logger.info("")
                     logger.info(auth_url)
                     logger.info("")
-                    logger.info("After authorizing, you will be redirected to a page.")
-                    logger.info("Copy the ENTIRE URL from your browser's address bar")
-                    logger.info("and paste it here:")
+                    logger.info("After authorizing, you will see a code.")
+                    logger.info("Copy that code and paste it here:")
                     logger.info("")
-                    authorization_response = input("Enter the authorization response URL: ").strip()
-                    flow.fetch_token(authorization_response=authorization_response)
+                    code = input("Enter the authorization code: ").strip()
+                    flow.fetch_token(code=code)
                     creds = flow.credentials
                 else:
                     creds = flow.run_local_server(port=0)
