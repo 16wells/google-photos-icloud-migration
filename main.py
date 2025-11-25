@@ -276,34 +276,169 @@ class MigrationOrchestrator:
                 logger.info(f"Removing extracted files: {extracted_dir}")
                 shutil.rmtree(extracted_dir)
     
+    def process_single_zip(self, zip_path: Path, zip_number: int, total_zips: int, 
+                           use_sync_method: bool = False) -> bool:
+        """
+        Process a single zip file: extract, process metadata, upload, cleanup.
+        
+        Args:
+            zip_path: Path to zip file
+            zip_number: Current zip number (for logging)
+            total_zips: Total number of zip files
+            use_sync_method: Whether to use Photos library sync method
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            logger.info("=" * 60)
+            logger.info(f"Processing zip {zip_number}/{total_zips}: {zip_path.name}")
+            logger.info("=" * 60)
+            
+            # Extract this zip file
+            extracted_dir = self.extractor.extract_zip(zip_path)
+            
+            # Process metadata for this zip
+            media_json_pairs = self.extractor.identify_media_json_pairs(extracted_dir)
+            logger.info(f"Found {len(media_json_pairs)} media files in this zip")
+            
+            if not media_json_pairs:
+                logger.warning(f"No media files found in {zip_path.name}, skipping")
+                return True
+            
+            # Merge metadata
+            processed_dir = self.base_dir / self.config['processing']['processed_dir']
+            processed_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Process metadata in batches
+            batch_size = self.config['processing']['batch_size']
+            all_files = list(media_json_pairs.keys())
+            
+            for i in range(0, len(all_files), batch_size):
+                batch = all_files[i:i + batch_size]
+                batch_pairs = {f: media_json_pairs[f] for f in batch}
+                logger.info(f"Processing metadata batch {i // batch_size + 1}/{(len(all_files) + batch_size - 1) // batch_size}")
+                self.metadata_merger.merge_all_metadata(batch_pairs, output_dir=processed_dir)
+            
+            # Parse albums for this zip
+            parser = AlbumParser()
+            parser.parse_from_directory_structure(extracted_dir)
+            parser.parse_from_json_metadata(media_json_pairs)
+            albums = parser.get_all_albums()
+            
+            # Upload files from this zip
+            if self.icloud_uploader is None:
+                self.setup_icloud_uploader(use_sync_method=use_sync_method)
+            
+            # Build file-to-album mapping
+            file_to_album = {}
+            for album_name, files in albums.items():
+                for file_path in files:
+                    file_to_album[file_path] = album_name
+            
+            # Get processed files
+            processed_files = []
+            for media_file in media_json_pairs.keys():
+                processed_file = processed_dir / media_file.name
+                if processed_file.exists():
+                    processed_files.append(processed_file)
+                else:
+                    processed_files.append(media_file)
+            
+            # Upload
+            if isinstance(self.icloud_uploader, iCloudPhotosSyncUploader):
+                upload_results = self.icloud_uploader.upload_files_batch(
+                    processed_files,
+                    albums=file_to_album
+                )
+            else:
+                # Group by album
+                upload_results = {}
+                for album_name, files in albums.items():
+                    # Map to processed files
+                    processed_album_files = [f for f in processed_files 
+                                           if file_to_album.get(f, '') == album_name]
+                    if processed_album_files:
+                        logger.info(f"Uploading album: {album_name} ({len(processed_album_files)} files)")
+                        album_results = self.icloud_uploader.upload_photos_batch(
+                            processed_album_files,
+                            album_name=album_name
+                        )
+                        upload_results.update(album_results)
+            
+            successful = sum(1 for v in upload_results.values() if v)
+            logger.info(f"Uploaded {successful}/{len(upload_results)} files from {zip_path.name}")
+            
+            # Cleanup extracted files for this zip (save disk space)
+            import shutil
+            if extracted_dir.exists():
+                logger.info(f"Cleaning up extracted files for {zip_path.name}")
+                shutil.rmtree(extracted_dir)
+            
+            logger.info(f"✓ Completed processing {zip_path.name}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to process {zip_path.name}: {e}", exc_info=True)
+            return False
+    
     def run(self, use_sync_method: bool = False):
         """Run the complete migration process."""
         try:
-            # Phase 1: Download
-            zip_files = self.download_zip_files()
+            # Phase 1: Download all zip files (but don't extract yet)
+            logger.info("=" * 60)
+            logger.info("Phase 1: Downloading zip files from Google Drive")
+            logger.info("=" * 60)
+            
+            drive_config = self.config['google_drive']
+            zip_dir = self.base_dir / self.config['processing']['zip_dir']
+            
+            zip_files = self.downloader.download_all_zips(
+                destination_dir=zip_dir,
+                folder_id=drive_config.get('folder_id') or None,
+                pattern=drive_config.get('zip_file_pattern') or None
+            )
             
             if not zip_files:
                 logger.error("No zip files found. Exiting.")
                 return
             
-            # Phase 2: Extract
-            extracted_dirs = self.extract_files(zip_files)
+            logger.info(f"Downloaded {len(zip_files)} zip files")
+            logger.info("")
+            logger.info("Now processing each zip file individually:")
+            logger.info("  - Extract → Process metadata → Upload → Cleanup")
+            logger.info("")
             
-            # Phase 3: Process metadata
-            media_json_pairs = self.process_metadata(extracted_dirs)
-            
-            # Phase 4: Parse albums
-            albums = self.parse_albums(media_json_pairs, extracted_dirs)
-            
-            # Phase 5: Upload
+            # Setup iCloud uploader once (before processing zips)
             self.setup_icloud_uploader(use_sync_method=use_sync_method)
-            upload_results = self.upload_to_icloud(media_json_pairs, albums)
             
-            # Phase 6: Cleanup
-            self.cleanup()
+            # Process each zip file one at a time
+            successful = 0
+            failed = 0
+            
+            for i, zip_file in enumerate(zip_files, 1):
+                if self.process_single_zip(zip_file, i, len(zip_files), use_sync_method):
+                    successful += 1
+                else:
+                    failed += 1
+                    logger.warning(f"Skipping remaining processing for {zip_file.name}")
+            
+            # Final cleanup
+            if self.config['processing'].get('cleanup_after_upload', False):
+                logger.info("=" * 60)
+                logger.info("Final cleanup")
+                logger.info("=" * 60)
+                processed_dir = self.base_dir / self.config['processing']['processed_dir']
+                if processed_dir.exists():
+                    import shutil
+                    logger.info(f"Removing processed files: {processed_dir}")
+                    shutil.rmtree(processed_dir)
             
             logger.info("=" * 60)
-            logger.info("Migration completed successfully!")
+            logger.info(f"Migration completed!")
+            logger.info(f"  Successful: {successful}/{len(zip_files)} zip files")
+            if failed > 0:
+                logger.info(f"  Failed: {failed}/{len(zip_files)} zip files")
             logger.info("=" * 60)
             
         except Exception as e:
