@@ -49,7 +49,15 @@ class DriveDownloader:
             else:
                 flow = InstalledAppFlow.from_client_secrets_file(
                     self.credentials_file, SCOPES)
-                creds = flow.run_local_server(port=0)
+                
+                # Check if we're in a headless environment (no DISPLAY)
+                # Use console flow for headless environments
+                if os.environ.get('DISPLAY') is None or not self._can_open_browser():
+                    logger.info("Running in headless mode - using console authentication")
+                    logger.info("Please visit the URL below and authorize the application:")
+                    creds = flow.run_console()
+                else:
+                    creds = flow.run_local_server(port=0)
             
             # Save the credentials for the next run
             with open(token_file, 'w') as token:
@@ -57,6 +65,15 @@ class DriveDownloader:
         
         self.service = build('drive', 'v3', credentials=creds)
         logger.info("Successfully authenticated with Google Drive API")
+    
+    def _can_open_browser(self):
+        """Check if we can open a browser."""
+        try:
+            import webbrowser
+            browser = webbrowser.get()
+            return browser is not None
+        except:
+            return False
     
     def list_zip_files(self, folder_id: Optional[str] = None, 
                        pattern: Optional[str] = None) -> List[dict]:
