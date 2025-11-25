@@ -47,7 +47,7 @@ function submitLogin(event) {
             data.devices.forEach(device => {
                 const button = document.createElement('button');
                 button.textContent = device.name;
-                button.onclick = () => selectDevice(device.id);
+                button.onclick = (e) => selectDevice(device.id, e);
                 devicesList.appendChild(button);
             });
         } else if (data.success) {
@@ -63,12 +63,14 @@ function submitLogin(event) {
 
 let selectedDeviceId = null;
 
-function selectDevice(deviceId) {
+function selectDevice(deviceId, event) {
     selectedDeviceId = deviceId;
     document.querySelectorAll('#devices-list button').forEach(btn => {
         btn.style.background = '#4285f4';
     });
-    event.target.style.background = '#34a853';
+    if (event && event.target) {
+        event.target.style.background = '#34a853';
+    }
 }
 
 function submit2FA() {
