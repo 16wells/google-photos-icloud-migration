@@ -33,6 +33,9 @@ class AlbumParser:
         media_extensions = {'.jpg', '.jpeg', '.heic', '.png', '.gif', '.bmp', '.tiff',
                            '.avi', '.mov', '.mp4', '.m4v', '.3gp', '.mkv'}
         
+        # Common top-level directories to skip (these are not album names)
+        skip_directories = {'takeout', 'takeout-', 'photos from', 'photos'}
+        
         # Find all media files
         media_files = []
         for ext in media_extensions:
@@ -43,17 +46,38 @@ class AlbumParser:
         for media_file in media_files:
             rel_path = media_file.relative_to(directory)
             
-            # Album is typically the parent directory name
             # Skip if file is directly in root
-            if len(rel_path.parts) > 1:
-                album_name = rel_path.parts[0]
-                
+            if len(rel_path.parts) <= 1:
+                continue
+            
+            # Find the first directory that's not a common skip directory
+            album_name = None
+            for i, part in enumerate(rel_path.parts[:-1]):  # Exclude filename
+                part_lower = part.lower().strip()
+                # Skip common top-level directories
+                if any(skip_dir in part_lower for skip_dir in skip_directories):
+                    continue
+                # Skip date-prefixed directories like "Photos from 2024-01-01"
+                if part_lower.startswith('photos from'):
+                    continue
+                # Use this directory as the album name
+                album_name = part
+                break
+            
+            # If we didn't find a valid album directory, try the deepest directory before the file
+            if not album_name and len(rel_path.parts) > 1:
+                # Use the parent directory of the file (last directory before filename)
+                album_name = rel_path.parts[-2]
+            
+            if album_name:
                 # Clean up album name (remove common prefixes)
                 album_name = self._clean_album_name(album_name)
                 
-                if album_name not in albums:
-                    albums[album_name] = []
-                albums[album_name].append(media_file)
+                # Skip if cleaned name is empty or still a skip directory
+                if album_name and album_name.lower() not in skip_directories:
+                    if album_name not in albums:
+                        albums[album_name] = []
+                    albums[album_name].append(media_file)
         
         self.albums = albums
         
@@ -119,10 +143,24 @@ class AlbumParser:
                 logger.debug(f"Failed to parse album from {json_file}: {e}")
                 continue
         
-        # Merge with existing albums
+        # Merge with existing albums, but JSON metadata takes precedence
+        # If a file was assigned to an album from directory structure but now has
+        # JSON metadata with a different album, update it
         for album_name, files in albums.items():
+            # Update file_to_album mapping for files with JSON metadata (takes precedence)
+            for file_path in files:
+                self.file_to_album[file_path] = album_name
+                # Remove from old album if it was there
+                for old_album_name, old_files in list(self.albums.items()):
+                    if file_path in old_files and old_album_name != album_name:
+                        old_files.remove(file_path)
+                        # Clean up empty albums
+                        if not old_files:
+                            del self.albums[old_album_name]
+            
+            # Add to new album
             if album_name in self.albums:
-                # Merge file lists
+                # Merge file lists, avoiding duplicates
                 existing_files = set(self.albums[album_name])
                 new_files = [f for f in files if f not in existing_files]
                 self.albums[album_name].extend(new_files)
@@ -145,9 +183,23 @@ class AlbumParser:
         # Remove common prefixes/suffixes
         name = name.strip()
         
+        # Skip common non-album directory names
+        skip_names = {'takeout', 'takeout-', 'photos from'}
+        if name.lower() in skip_names:
+            return ""
+        
         # Remove "Google Photos" prefix if present
         if name.startswith("Google Photos"):
             name = name[len("Google Photos"):].strip()
+        
+        # Remove "Photos from" prefix if present (e.g., "Photos from 2024-01-01")
+        if name.lower().startswith("photos from"):
+            # Try to extract album name after date
+            parts = name.split()
+            if len(parts) > 3:  # "Photos from YYYY-MM-DD Album Name"
+                name = " ".join(parts[3:])
+            else:
+                name = ""
         
         # Remove date prefixes if present (e.g., "2024-01-01 Album Name")
         # Keep the actual album name

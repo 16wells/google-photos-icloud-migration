@@ -4,6 +4,8 @@ token.json
 config.yaml
 *.key
 *.pem
+.env
+.env.local
 
 # Python
 __pycache__/
@@ -51,7 +53,10 @@ processed/
 .DS_Store
 Thumbs.db
 
-# Test files
-test_*.py
-*_test.py
+# Test files (keep test infrastructure, ignore test outputs)
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+*.cover
 

@@ -75,6 +75,7 @@ class MigrationOrchestrator:
         
         # Continue prompt handling
         self._skip_continue_prompts = False
+        self._restart_requested = False
     
     def _load_config(self, config_path: str) -> Dict:
         """Load configuration from YAML file."""

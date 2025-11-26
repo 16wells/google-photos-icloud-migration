@@ -1,0 +1,28 @@
+# Development dependencies
+# Install with: pip install -r requirements-dev.txt
+
+# Include production dependencies
+-r requirements.txt
+
+# Testing
+pytest>=7.0.0
+pytest-cov>=4.0.0
+pytest-mock>=3.10.0
+
+# Code Quality
+black>=23.0.0
+flake8>=6.0.0
+isort>=5.12.0
+mypy>=1.0.0
+types-PyYAML>=6.0.0
+
+# Development Tools
+pre-commit>=3.0.0
+ipython>=8.0.0
+
+# Rich terminal output (can be used in production too)
+rich>=13.0.0
+
+# Environment variable management
+python-dotenv>=1.0.0
+
