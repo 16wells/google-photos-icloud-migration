@@ -1705,7 +1705,10 @@ class iCloudPhotosSyncUploader:
                 PHAuthorizationStatusLimited, PHAuthorizationStatusNotDetermined,
                 PHAuthorizationStatusRestricted
             )
-            from Photos import PHAssetCollection, PHAssetCollectionChangeRequest, PHFetchOptions
+            from Photos import (
+                PHAssetCollection, PHAssetCollectionChangeRequest, PHFetchOptions,
+                PHAssetCollectionTypeAlbum, PHAssetCollectionSubtypeAlbumRegular
+            )
             from Foundation import NSURL
             self.PHPhotoLibrary = PHPhotoLibrary
             self.PHAssetChangeRequest = PHAssetChangeRequest
@@ -1717,6 +1720,8 @@ class iCloudPhotosSyncUploader:
             self.PHAssetCollection = PHAssetCollection
             self.PHAssetCollectionChangeRequest = PHAssetCollectionChangeRequest
             self.PHFetchOptions = PHFetchOptions
+            self.PHAssetCollectionTypeAlbum = PHAssetCollectionTypeAlbum
+            self.PHAssetCollectionSubtypeAlbumRegular = PHAssetCollectionSubtypeAlbumRegular
             self.NSURL = NSURL
         except ImportError as e:
             raise ImportError(
@@ -1776,12 +1781,13 @@ class iCloudPhotosSyncUploader:
                 self.PHPhotoLibrary.requestAuthorization_(request_callback)
                 
                 # Wait for callback (with timeout)
+                from Foundation import NSDate
                 timeout = 30  # 30 seconds
                 start_time = time.time()
                 while not callback_called[0] and (time.time() - start_time) < timeout:
                     NSRunLoop.currentRunLoop().runMode_beforeDate_(
                         NSDefaultRunLoopMode,
-                        time.time() + 0.1
+                        NSDate.dateWithTimeIntervalSinceNow_(0.1)
                     )
                     time.sleep(0.1)
                 
@@ -1831,8 +1837,8 @@ class iCloudPhotosSyncUploader:
             # Fetch existing albums
             fetch_options = self.PHFetchOptions.alloc().init()
             collections = self.PHAssetCollection.fetchAssetCollectionsWithType_subtype_options_(
-                self.PHAssetCollection.PHAssetCollectionTypeAlbum,
-                self.PHAssetCollection.PHAssetCollectionSubtypeAlbumRegular,
+                self.PHAssetCollectionTypeAlbum,
+                self.PHAssetCollectionSubtypeAlbumRegular,
                 fetch_options
             )
             
@@ -1874,13 +1880,13 @@ class iCloudPhotosSyncUploader:
             )
             
             # Wait for completion
-            from Foundation import NSRunLoop, NSDefaultRunLoopMode
+            from Foundation import NSRunLoop, NSDefaultRunLoopMode, NSDate
             timeout = 30
             start_time = time.time()
             while not completed[0] and (time.time() - start_time) < timeout:
                 NSRunLoop.currentRunLoop().runMode_beforeDate_(
                     NSDefaultRunLoopMode,
-                    time.time() + 0.1
+                    NSDate.dateWithTimeIntervalSinceNow_(0.1)
                 )
                 time.sleep(0.1)
             
@@ -1955,7 +1961,11 @@ class iCloudPhotosSyncUploader:
                 if not album_collection:
                     logger.warning(f"Could not get/create album '{album_name}', saving without album")
             
-            # Save photo with metadata preservation
+            # Determine if file is a video based on extension
+            video_extensions = {'.mp4', '.mov', '.avi', '.m4v', '.3gp', '.mkv'}
+            is_video = file_path.suffix.lower() in video_extensions
+            
+            # Save photo/video with metadata preservation
             success_ref = [False]
             error_ref = [None]
             created_asset_placeholder = [None]
@@ -1963,8 +1973,12 @@ class iCloudPhotosSyncUploader:
             
             def perform_changes():
                 try:
-                    # Use creationRequestForAssetFromImage(atFileURL:) to preserve EXIF metadata
-                    change_request = self.PHAssetChangeRequest.creationRequestForAssetFromImageAtFileURL_(file_url)
+                    # Use appropriate method based on file type to preserve metadata
+                    if is_video:
+                        change_request = self.PHAssetChangeRequest.creationRequestForAssetFromVideoAtFileURL_(file_url)
+                    else:
+                        change_request = self.PHAssetChangeRequest.creationRequestForAssetFromImageAtFileURL_(file_url)
+                    
                     if change_request:
                         created_asset_placeholder[0] = change_request.placeholderForCreatedAsset()
                         
@@ -1991,13 +2005,13 @@ class iCloudPhotosSyncUploader:
             )
             
             # Wait for completion
-            from Foundation import NSRunLoop, NSDefaultRunLoopMode
+            from Foundation import NSRunLoop, NSDefaultRunLoopMode, NSDate
             timeout = 30
             start_time = time.time()
             while not completed[0] and (time.time() - start_time) < timeout:
                 NSRunLoop.currentRunLoop().runMode_beforeDate_(
                     NSDefaultRunLoopMode,
-                    time.time() + 0.1
+                    NSDate.dateWithTimeIntervalSinceNow_(0.1)
                 )
                 time.sleep(0.1)
             
