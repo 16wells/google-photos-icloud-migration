@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import List, Dict, Tuple, Set, Optional
 from tqdm import tqdm
 
+from exceptions import ExtractionError
+
 logger = logging.getLogger(__name__)
 
 # Supported media file extensions
@@ -49,17 +51,21 @@ class Extractor:
         try:
             with zipfile.ZipFile(zip_path, 'r') as test_zip:
                 test_zip.testzip()
-        except zipfile.BadZipFile:
-            raise zipfile.BadZipFile(
+        except zipfile.BadZipFile as e:
+            raise ExtractionError(
                 f"File '{zip_path.name}' is not a valid zip file. "
                 f"It may be corrupted or incomplete. File size: {zip_path.stat().st_size / (1024*1024):.1f} MB. "
                 f"Consider re-downloading this file from Google Drive."
-            )
+            ) from e
+        except (OSError, IOError) as e:
+            raise ExtractionError(
+                f"Error accessing zip file '{zip_path.name}': {e}. "
+                f"File may be corrupted, incomplete, or inaccessible."
+            ) from e
         except Exception as e:
-            raise RuntimeError(
-                f"Error validating zip file '{zip_path.name}': {e}. "
-                f"File may be corrupted or incomplete."
-            )
+            raise ExtractionError(
+                f"Unexpected error validating zip file '{zip_path.name}': {e}"
+            ) from e
         
         logger.info(f"Extracting {zip_path.name} to {extract_to}")
         

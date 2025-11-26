@@ -4,6 +4,7 @@ Google Drive API integration for downloading Google Takeout zip files.
 import os
 import json
 import shutil
+import time
 from pathlib import Path
 from typing import List, Optional
 from googleapiclient.discovery import build
@@ -11,8 +12,11 @@ from googleapiclient.http import MediaIoBaseDownload
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
+from googleapiclient.errors import HttpError
 import io
 import logging
+
+from exceptions import DownloadError, AuthenticationError
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +109,7 @@ class DriveDownloader:
                 return True
             browser = webbrowser.get()
             return browser is not None
-        except:
+        except Exception:
             return False
     
     def _is_headless_environment(self):
@@ -163,15 +167,18 @@ class DriveDownloader:
                 ).execute()
                 break
             except HttpError as e:
-                if e.resp.status == 500 and attempt < max_retries - 1:
-                    # Internal server error - retry with exponential backoff
+                if e.resp.status in (500, 502, 503, 504) and attempt < max_retries - 1:
+                    # Server errors - retry with exponential backoff
                     wait_time = retry_delay * (2 ** attempt)
-                    logger.warning(f"Google Drive API returned 500 error. Retrying in {wait_time} seconds... (attempt {attempt + 1}/{max_retries})")
+                    logger.warning(
+                        f"Google Drive API returned {e.resp.status} error. "
+                        f"Retrying in {wait_time} seconds... (attempt {attempt + 1}/{max_retries})"
+                    )
                     time.sleep(wait_time)
                     continue
                 elif e.resp.status == 500 and folder_id:
                     # If folder_id query fails, try without folder_id
-                    logger.warning(f"Query with folder_id failed. Trying without folder filter...")
+                    logger.warning("Query with folder_id failed. Trying without folder filter...")
                     query = "mimeType='application/zip' or mimeType='application/x-zip-compressed'"
                     try:
                         results = self.service.files().list(
@@ -181,9 +188,18 @@ class DriveDownloader:
                         ).execute()
                         break
                     except HttpError as e2:
-                        raise e2
+                        raise DownloadError(
+                            f"Failed to list files from Google Drive: HTTP {e2.resp.status} - {e2}"
+                        ) from e2
+                elif e.resp.status == 401:
+                    raise AuthenticationError(
+                        "Google Drive API authentication failed. "
+                        "Please re-authenticate by deleting token.json and running again."
+                    ) from e
                 else:
-                    raise
+                    raise DownloadError(
+                        f"Failed to list zip files from Google Drive: HTTP {e.resp.status} - {e}"
+                    ) from e
         
         all_files = results.get('files', [])
         
@@ -198,7 +214,10 @@ class DriveDownloader:
                 ).execute()
                 all_files.extend(results.get('files', []))
             except HttpError as e:
-                logger.warning(f"Error fetching next page: {e}. Continuing with files fetched so far.")
+                logger.warning(
+                    f"Error fetching next page of results: HTTP {e.resp.status} - {e}. "
+                    f"Continuing with {len(all_files)} files fetched so far."
+                )
                 break
         
         # Filter by pattern if provided (do this in Python for better pattern matching)
@@ -285,25 +304,58 @@ class DriveDownloader:
         # Check disk space before downloading
         if file_size:
             if not self._check_disk_space(destination_dir, file_size):
-                raise OSError(
+                raise DownloadError(
                     f"Insufficient disk space to download {file_name} "
-                    f"({file_size / (1024**3):.2f} GB)"
+                    f"({file_size / (1024**3):.2f} GB). "
+                    f"Please free up disk space and try again."
                 )
         
         logger.info(f"Downloading {file_name}...")
         
-        request = self.service.files().get_media(fileId=file_id)
-        fh = io.FileIO(destination_path, 'wb')
-        downloader = MediaIoBaseDownload(fh, request)
+        # Retry logic for downloads with exponential backoff
+        max_retries = 3
+        retry_delay = 2.0
         
-        done = False
-        while done is False:
-            status, done = downloader.next_chunk()
-            if status:
-                logger.debug(f"Download progress: {int(status.progress() * 100)}%")
-        
-        logger.info(f"Downloaded {file_name} ({destination_path.stat().st_size / 1024 / 1024:.2f} MB)")
-        return destination_path
+        for attempt in range(max_retries):
+            try:
+                request = self.service.files().get_media(fileId=file_id)
+                fh = io.FileIO(destination_path, 'wb')
+                downloader = MediaIoBaseDownload(fh, request)
+                
+                done = False
+                while done is False:
+                    status, done = downloader.next_chunk()
+                    if status:
+                        logger.debug(f"Download progress: {int(status.progress() * 100)}%")
+                
+                logger.info(f"Downloaded {file_name} ({destination_path.stat().st_size / 1024 / 1024:.2f} MB)")
+                return destination_path
+                
+            except HttpError as e:
+                if attempt < max_retries - 1 and e.resp.status in (500, 502, 503, 504):
+                    wait_time = retry_delay * (2 ** attempt)
+                    logger.warning(
+                        f"Download failed for {file_name} (attempt {attempt + 1}/{max_retries}): "
+                        f"HTTP {e.resp.status}. Retrying in {wait_time:.1f} seconds..."
+                    )
+                    time.sleep(wait_time)
+                    # Remove partial file if it exists
+                    if destination_path.exists():
+                        destination_path.unlink()
+                    continue
+                else:
+                    raise DownloadError(
+                        f"Failed to download {file_name} from Google Drive: HTTP {e.resp.status} - {e}"
+                    ) from e
+            except (OSError, IOError) as e:
+                raise DownloadError(
+                    f"Failed to save {file_name} to disk: {e}. "
+                    f"Check disk space and file permissions."
+                ) from e
+            except Exception as e:
+                raise DownloadError(
+                    f"Unexpected error downloading {file_name}: {e}"
+                ) from e
     
     def download_all_zips(self, destination_dir: Path, 
                          folder_id: Optional[str] = None,

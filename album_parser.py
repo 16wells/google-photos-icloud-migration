@@ -6,6 +6,8 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Set, Optional
 
+from exceptions import AlbumError
+
 logger = logging.getLogger(__name__)
 
 

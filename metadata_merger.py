@@ -9,6 +9,8 @@ from typing import Dict, Optional, List
 from datetime import datetime
 from tqdm import tqdm
 
+from exceptions import MetadataError
+
 logger = logging.getLogger(__name__)
 
 
@@ -40,13 +42,13 @@ class MetadataMerger:
                 check=True
             )
             logger.info(f"ExifTool version {result.stdout.strip()} found")
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            raise RuntimeError(
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            raise MetadataError(
                 "ExifTool is not installed. Please install it:\n"
                 "  macOS: brew install exiftool\n"
                 "  Linux: apt-get install libimage-exiftool-perl\n"
                 "  Or download from: https://exiftool.org/"
-            )
+            ) from e
     
     def parse_json_metadata(self, json_path: Path) -> Dict:
         """
@@ -61,8 +63,11 @@ class MetadataMerger:
         try:
             with open(json_path, 'r', encoding='utf-8') as f:
                 return json.load(f)
-        except Exception as e:
+        except (json.JSONDecodeError, IOError, OSError) as e:
             logger.warning(f"Failed to parse JSON {json_path}: {e}")
+            return {}
+        except Exception as e:
+            logger.warning(f"Unexpected error parsing JSON {json_path}: {e}")
             return {}
     
     def convert_timestamp(self, timestamp: str) -> Optional[str]:
@@ -84,8 +89,11 @@ class MetadataMerger:
                 dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
             
             return dt.strftime("%Y:%m:%d %H:%M:%S")
-        except Exception as e:
+        except (ValueError, OSError) as e:
             logger.warning(f"Failed to convert timestamp {timestamp}: {e}")
+            return None
+        except Exception as e:
+            logger.warning(f"Unexpected error converting timestamp {timestamp}: {e}")
             return None
     
     def build_exiftool_args(self, media_file: Path, json_file: Path,
@@ -153,7 +161,7 @@ class MetadataMerger:
         
         return args
     
-    def merge_metadata(self, media_file: Path, json_file: Optional[Path]) -> bool:
+    def merge_metadata(self, media_file: Path, json_file: Optional[Path]) -> None:
         """
         Merge metadata from JSON file into media file.
         
@@ -166,32 +174,40 @@ class MetadataMerger:
         """
         if json_file is None or not json_file.exists():
             logger.debug(f"No JSON metadata for {media_file.name}")
-            return False
+            return
         
-        try:
-            metadata = self.parse_json_metadata(json_file)
-            if not metadata:
-                return False
-            
-            args = self.build_exiftool_args(media_file, json_file, metadata)
-            
-            # Run ExifTool
-            result = subprocess.run(
-                args,
-                capture_output=True,
-                text=True,
-                check=True
-            )
-            
-            logger.debug(f"Merged metadata for {media_file.name}")
-            return True
+        metadata = self.parse_json_metadata(json_file)
+        if not metadata:
+            logger.debug(f"No valid metadata found in {json_file}")
+            return
+        
+        args = self.build_exiftool_args(media_file, json_file, metadata)
+        
+        # Run ExifTool
+        result = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        
+        logger.debug(f"Merged metadata for {media_file.name}")
             
         except subprocess.CalledProcessError as e:
             logger.error(f"ExifTool failed for {media_file.name}: {e.stderr}")
-            return False
+            raise MetadataError(
+                f"Failed to merge metadata for {media_file.name}: ExifTool error - {e.stderr}"
+            ) from e
+        except (OSError, IOError) as e:
+            logger.error(f"File I/O error while merging metadata for {media_file.name}: {e}")
+            raise MetadataError(
+                f"Failed to access file {media_file.name} during metadata merge: {e}"
+            ) from e
         except Exception as e:
-            logger.error(f"Failed to merge metadata for {media_file.name}: {e}")
-            return False
+            logger.error(f"Unexpected error merging metadata for {media_file.name}: {e}")
+            raise MetadataError(
+                f"Unexpected error merging metadata for {media_file.name}: {e}"
+            ) from e
     
     def merge_all_metadata(self, media_json_pairs: Dict[Path, Optional[Path]],
                           output_dir: Optional[Path] = None) -> Dict[Path, bool]:
@@ -216,8 +232,12 @@ class MetadataMerger:
                 shutil.copy2(media_file, output_file)
                 media_file = output_file
             
-            success = self.merge_metadata(media_file, json_file)
-            results[media_file] = success
+            try:
+                self.merge_metadata(media_file, json_file)
+                results[media_file] = True
+            except MetadataError as e:
+                logger.error(f"Metadata merge failed: {e}")
+                results[media_file] = False
         
         successful = sum(1 for v in results.values() if v)
         logger.info(f"Merged metadata for {successful}/{len(results)} files")
