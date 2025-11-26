@@ -100,6 +100,10 @@ fi
 echo ""
 echo "Installing Python dependencies..."
 
+# Upgrade pip first
+echo "Upgrading pip to latest version..."
+python3 -m pip install --upgrade pip
+
 # Check if requirements.txt exists
 if [ ! -f "requirements.txt" ]; then
     echo "✗ ERROR: requirements.txt not found!"
