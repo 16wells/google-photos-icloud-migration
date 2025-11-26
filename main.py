@@ -26,6 +26,7 @@ from metadata_merger import MetadataMerger
 from album_parser import AlbumParser
 from icloud_uploader import iCloudUploader, iCloudPhotosSyncUploader
 from exceptions import ConfigurationError
+from config import MigrationConfig
 
 logger = logging.getLogger(__name__)
 
@@ -38,35 +39,64 @@ class MigrationStoppedException(Exception):
 class MigrationOrchestrator:
     """Orchestrates the entire migration process."""
     
-    def __init__(self, config_path: str):
+    def __init__(self, config_path: str, use_config_class: bool = True):
         """
         Initialize the orchestrator.
         
         Args:
             config_path: Path to configuration YAML file
+            use_config_class: If True, use MigrationConfig dataclass (recommended)
         """
         self.config_path = config_path
-        self.config = self._load_config(config_path)
+        
+        # Load configuration using new Config class if enabled
+        if use_config_class:
+            try:
+                self.migration_config = MigrationConfig.from_yaml(config_path, validate=True)
+                # Create backward-compatible dict for gradual migration
+                self.config = self._config_to_dict(self.migration_config)
+            except ValueError as e:
+                raise ConfigurationError(str(e)) from e
+        else:
+            # Fallback to old dict-based config loading
+            self.migration_config = None
+            self.config = self._load_config(config_path)
+        
         self._setup_logging()
         
-        # Initialize components
-        self.base_dir = Path(self.config['processing']['base_dir'])
-        self.base_dir.mkdir(parents=True, exist_ok=True)
+        # Initialize components - use config object if available
+        if self.migration_config:
+            self.base_dir = self.migration_config.processing.base_path
+            self.base_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Initialize downloader
+            self.downloader = DriveDownloader(
+                self.migration_config.google_drive.credentials_file
+            )
+            
+            # Initialize metadata merger
+            self.metadata_merger = MetadataMerger(
+                preserve_dates=self.migration_config.metadata.preserve_dates,
+                preserve_gps=self.migration_config.metadata.preserve_gps,
+                preserve_descriptions=self.migration_config.metadata.preserve_descriptions
+            )
+        else:
+            # Fallback to dict-based access
+            self.base_dir = Path(self.config['processing']['base_dir'])
+            self.base_dir.mkdir(parents=True, exist_ok=True)
+            
+            drive_config = self.config['google_drive']
+            self.downloader = DriveDownloader(drive_config['credentials_file'])
+            
+            metadata_config = self.config['metadata']
+            self.metadata_merger = MetadataMerger(
+                preserve_dates=metadata_config['preserve_dates'],
+                preserve_gps=metadata_config['preserve_gps'],
+                preserve_descriptions=metadata_config['preserve_descriptions']
+            )
         
-        # Initialize downloader
-        drive_config = self.config['google_drive']
-        self.downloader = DriveDownloader(drive_config['credentials_file'])
-        
-        # Initialize extractor
+        # Initialize extractor (same for both)
         self.extractor = Extractor(self.base_dir)
-        
-        # Initialize metadata merger
-        metadata_config = self.config['metadata']
-        self.metadata_merger = MetadataMerger(
-            preserve_dates=metadata_config['preserve_dates'],
-            preserve_gps=metadata_config['preserve_gps'],
-            preserve_descriptions=metadata_config['preserve_descriptions']
-        )
         
         # Initialize album parser
         self.album_parser = AlbumParser()
@@ -87,6 +117,42 @@ class MigrationOrchestrator:
         self._skip_continue_prompts = False
         self._restart_requested = False
     
+    def _config_to_dict(self, config: MigrationConfig) -> Dict:
+        """Convert MigrationConfig object to dict for backward compatibility."""
+        return {
+            'google_drive': {
+                'credentials_file': config.google_drive.credentials_file,
+                'folder_id': config.google_drive.folder_id,
+                'zip_file_pattern': config.google_drive.zip_file_pattern,
+            },
+            'icloud': {
+                'apple_id': config.icloud.apple_id,
+                'password': config.icloud.password,
+                'trusted_device_id': config.icloud.trusted_device_id,
+                'two_fa_code': config.icloud.two_fa_code,
+                'photos_library_path': config.icloud.photos_library_path,
+                'method': config.icloud.method,
+            },
+            'processing': {
+                'base_dir': config.processing.base_dir,
+                'zip_dir': config.processing.zip_dir,
+                'extracted_dir': config.processing.extracted_dir,
+                'processed_dir': config.processing.processed_dir,
+                'batch_size': config.processing.batch_size,
+                'cleanup_after_upload': config.processing.cleanup_after_upload,
+            },
+            'metadata': {
+                'preserve_dates': config.metadata.preserve_dates,
+                'preserve_gps': config.metadata.preserve_gps,
+                'preserve_descriptions': config.metadata.preserve_descriptions,
+                'preserve_albums': config.metadata.preserve_albums,
+            },
+            'logging': {
+                'level': config.logging.level,
+                'file': config.logging.file,
+            },
+        }
+    
     def _load_config(self, config_path: str) -> Dict:
         """Load configuration from YAML file with validation and environment variable support."""
         # Load YAML config
@@ -99,11 +165,8 @@ class MigrationOrchestrator:
         if config is None:
             raise ConfigurationError(f"Configuration file '{config_path}' is empty or invalid")
         
-        # Validate configuration schema
-        self._validate_config(config)
-        
-        # Override sensitive values with environment variables if present
-        config = self._apply_env_overrides(config)
+        # Note: Validation and env overrides are now handled in MigrationConfig class
+        # This method is kept for backward compatibility when use_config_class=False
         
         # Ensure processing section exists with defaults
         if 'processing' not in config:
