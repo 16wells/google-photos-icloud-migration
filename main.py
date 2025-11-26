@@ -27,6 +27,7 @@ from album_parser import AlbumParser
 from icloud_uploader import iCloudUploader, iCloudPhotosSyncUploader
 from exceptions import ConfigurationError
 from config import MigrationConfig
+from utils.logging_config import setup_logging
 
 logger = logging.getLogger(__name__)
 
@@ -248,39 +249,37 @@ class MigrationOrchestrator:
         return config
     
     def _setup_logging(self):
-        """Set up logging configuration."""
-        log_config = self.config.get('logging', {})
-        level = getattr(logging, log_config.get('level', 'INFO'))
-        log_file = log_config.get('file', 'migration.log')
+        """Set up logging configuration with rotation and optional structured logging."""
+        # Get logging config from either MigrationConfig or dict
+        if self.migration_config:
+            log_config = self.migration_config.logging
+            log_file = log_config.file
+            level = log_config.level
+        else:
+            log_config = self.config.get('logging', {})
+            log_file = log_config.get('file', 'migration.log')
+            level = log_config.get('level', 'INFO')
         
-        class SafeFileHandler(logging.FileHandler):
-            """File handler that gracefully handles disk space errors."""
-            def emit(self, record):
-                try:
-                    super().emit(record)
-                except OSError as e:
-                    if e.errno == 28:  # No space left on device
-                        # Silently skip logging to file if disk is full
-                        pass
-                    else:
-                        raise
-        
-        handlers = [logging.StreamHandler(sys.stdout)]
-        
-        # Try to add file handler, but don't fail if disk is full
+        # Set up logging with rotation
         try:
-            file_handler = SafeFileHandler(log_file)
-            handlers.append(file_handler)
+            setup_logging(
+                log_file=log_file,
+                level=level,
+                enable_json=False,  # Can be made configurable
+                enable_rotation=True,
+                max_bytes=10 * 1024 * 1024,  # 10MB
+                backup_count=5,
+                separate_error_log=True
+            )
         except (OSError, IOError) as e:
-            # If we can't create log file (e.g., no disk space), just use console
-            print(f"Warning: Could not create log file '{log_file}': {e}", file=sys.stderr)
-            print("Continuing with console logging only.", file=sys.stderr)
-        
-        logging.basicConfig(
-            level=level,
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-            handlers=handlers
-        )
+            # If we can't create log file (e.g., no disk space), fallback to basic logging
+            print(f"Warning: Could not set up advanced logging for '{log_file}': {e}", file=sys.stderr)
+            print("Falling back to basic console logging.", file=sys.stderr)
+            logging.basicConfig(
+                level=getattr(logging, level.upper(), logging.INFO),
+                format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                handlers=[logging.StreamHandler(sys.stdout)]
+            )
     
     def download_zip_files(self) -> List[Path]:
         """
