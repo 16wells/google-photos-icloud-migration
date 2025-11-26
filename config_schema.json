@@ -1,0 +1,141 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["google_drive", "processing"],
+  "properties": {
+    "google_drive": {
+      "type": "object",
+      "required": ["credentials_file"],
+      "properties": {
+        "credentials_file": {
+          "type": "string",
+          "description": "Path to Google Drive API credentials JSON file"
+        },
+        "folder_id": {
+          "type": ["string", "null"],
+          "description": "Optional folder ID in Google Drive containing zip files"
+        },
+        "zip_file_pattern": {
+          "type": "string",
+          "default": "takeout-*.zip",
+          "description": "Pattern to match zip files (e.g., 'takeout-*.zip')"
+        }
+      },
+      "additionalProperties": false
+    },
+    "icloud": {
+      "type": "object",
+      "properties": {
+        "apple_id": {
+          "type": ["string", "null"],
+          "description": "Apple ID email (can also use ICLOUD_APPLE_ID env var)"
+        },
+        "password": {
+          "type": ["string", "null"],
+          "description": "Apple ID password (leave empty to be prompted, or use ICLOUD_PASSWORD env var)"
+        },
+        "trusted_device_id": {
+          "type": ["string", "null"],
+          "description": "Trusted device ID for 2FA (can also use ICLOUD_2FA_DEVICE_ID env var)"
+        },
+        "two_fa_code": {
+          "type": ["string", "null"],
+          "description": "2FA verification code (can also use ICLOUD_2FA_CODE env var)"
+        },
+        "photos_library_path": {
+          "type": ["string", "null"],
+          "description": "Path to Photos library (optional, for --use-sync method)"
+        },
+        "method": {
+          "type": "string",
+          "enum": ["api", "photokit"],
+          "default": "photokit",
+          "description": "Upload method: 'api' or 'photokit'"
+        }
+      },
+      "additionalProperties": false
+    },
+    "processing": {
+      "type": "object",
+      "required": ["base_dir"],
+      "properties": {
+        "base_dir": {
+          "type": "string",
+          "description": "Base directory for processing files"
+        },
+        "zip_dir": {
+          "type": "string",
+          "default": "zips",
+          "description": "Directory for downloaded zip files (relative to base_dir)"
+        },
+        "extracted_dir": {
+          "type": "string",
+          "default": "extracted",
+          "description": "Directory for extracted files (relative to base_dir)"
+        },
+        "processed_dir": {
+          "type": "string",
+          "default": "processed",
+          "description": "Directory for processed files (relative to base_dir)"
+        },
+        "batch_size": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 100,
+          "description": "Batch size for processing (number of files to process at once)"
+        },
+        "cleanup_after_upload": {
+          "type": "boolean",
+          "default": true,
+          "description": "Clean up extracted files after processing"
+        }
+      },
+      "additionalProperties": false
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "preserve_dates": {
+          "type": "boolean",
+          "default": true,
+          "description": "Preserve dates from PhotoTakenTimeTimestamp"
+        },
+        "preserve_gps": {
+          "type": "boolean",
+          "default": true,
+          "description": "Preserve GPS coordinates"
+        },
+        "preserve_descriptions": {
+          "type": "boolean",
+          "default": true,
+          "description": "Preserve descriptions"
+        },
+        "preserve_albums": {
+          "type": "boolean",
+          "default": true,
+          "description": "Preserve album information"
+        }
+      },
+      "additionalProperties": false
+    },
+    "logging": {
+      "type": "object",
+      "properties": {
+        "level": {
+          "type": "string",
+          "enum": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+          "default": "INFO",
+          "description": "Logging level"
+        },
+        "file": {
+          "type": "string",
+          "default": "migration.log",
+          "description": "Log file path"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
+

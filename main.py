@@ -4,18 +4,28 @@ Main orchestration script for Google Photos to iCloud Photos migration.
 import argparse
 import json
 import logging
+import os
 import sys
 import zipfile
 from pathlib import Path
 from typing import Dict, List, Optional
 import yaml
+import jsonschema
 from tqdm import tqdm
+
+# Load environment variables from .env file if it exists
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # python-dotenv is optional
 
 from drive_downloader import DriveDownloader
 from extractor import Extractor
 from metadata_merger import MetadataMerger
 from album_parser import AlbumParser
 from icloud_uploader import iCloudUploader, iCloudPhotosSyncUploader
+from exceptions import ConfigurationError
 
 logger = logging.getLogger(__name__)
 
@@ -78,9 +88,22 @@ class MigrationOrchestrator:
         self._restart_requested = False
     
     def _load_config(self, config_path: str) -> Dict:
-        """Load configuration from YAML file."""
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)
+        """Load configuration from YAML file with validation and environment variable support."""
+        # Load YAML config
+        try:
+            with open(config_path, 'r') as f:
+                config = yaml.safe_load(f)
+        except (yaml.YAMLError, IOError, OSError) as e:
+            raise ConfigurationError(f"Failed to load configuration file '{config_path}': {e}") from e
+        
+        if config is None:
+            raise ConfigurationError(f"Configuration file '{config_path}' is empty or invalid")
+        
+        # Validate configuration schema
+        self._validate_config(config)
+        
+        # Override sensitive values with environment variables if present
+        config = self._apply_env_overrides(config)
         
         # Ensure processing section exists with defaults
         if 'processing' not in config:
@@ -98,6 +121,66 @@ class MigrationOrchestrator:
         for key, default_value in processing_defaults.items():
             if key not in config['processing']:
                 config['processing'][key] = default_value
+        
+        return config
+    
+    def _validate_config(self, config: Dict) -> None:
+        """Validate configuration against JSON schema."""
+        try:
+            schema_path = Path(__file__).parent / 'config_schema.json'
+            if schema_path.exists():
+                with open(schema_path, 'r') as f:
+                    schema = json.load(f)
+                
+                jsonschema.validate(instance=config, schema=schema)
+                logger.debug("Configuration validated against schema")
+        except jsonschema.ValidationError as e:
+            raise ConfigurationError(
+                f"Configuration validation failed: {e.message}\n"
+                f"Path: {'.'.join(str(p) for p in e.path)}"
+            ) from e
+        except (IOError, OSError, json.JSONDecodeError) as e:
+            logger.warning(f"Could not load configuration schema for validation: {e}")
+            # Continue without validation if schema file is missing
+    
+    def _apply_env_overrides(self, config: Dict) -> Dict:
+        """Apply environment variable overrides to configuration."""
+        # Create a deep copy to avoid modifying the original
+        config = json.loads(json.dumps(config))
+        
+        # iCloud credentials from environment
+        if 'icloud' not in config:
+            config['icloud'] = {}
+        
+        # Override with environment variables if present
+        env_apple_id = os.getenv('ICLOUD_APPLE_ID')
+        if env_apple_id:
+            config['icloud']['apple_id'] = env_apple_id
+            logger.debug("Using Apple ID from ICLOUD_APPLE_ID environment variable")
+        
+        env_password = os.getenv('ICLOUD_PASSWORD')
+        if env_password:
+            config['icloud']['password'] = env_password
+            logger.debug("Using password from ICLOUD_PASSWORD environment variable")
+        
+        env_2fa_code = os.getenv('ICLOUD_2FA_CODE')
+        if env_2fa_code:
+            config['icloud']['two_fa_code'] = env_2fa_code
+            logger.debug("Using 2FA code from ICLOUD_2FA_CODE environment variable")
+        
+        env_device_id = os.getenv('ICLOUD_2FA_DEVICE_ID')
+        if env_device_id:
+            config['icloud']['trusted_device_id'] = env_device_id
+            logger.debug("Using device ID from ICLOUD_2FA_DEVICE_ID environment variable")
+        
+        # Google Drive credentials
+        if 'google_drive' not in config:
+            config['google_drive'] = {}
+        
+        env_credentials = os.getenv('GOOGLE_DRIVE_CREDENTIALS_FILE')
+        if env_credentials:
+            config['google_drive']['credentials_file'] = env_credentials
+            logger.debug("Using credentials file from GOOGLE_DRIVE_CREDENTIALS_FILE environment variable")
         
         return config
     

@@ -7,4 +7,6 @@ pyyaml>=6.0
 tqdm>=4.66.0
 python-dateutil>=2.8.2
 pyobjc-framework-Photos>=10.0
+python-dotenv>=1.0.0
+jsonschema>=4.17.0
 
