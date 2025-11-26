@@ -47,10 +47,14 @@ fi
 VM_HOST="$1"
 VM_PATH="${2:-~}"
 
-# Files to sync (only the updated ones)
+# Files to sync (updated files + 2FA helper scripts)
 FILES=(
     "main.py"
     "icloud_uploader.py"
+    "setup-vm-2fa.sh"
+    "check-auth-status.py"
+    "request-2fa-code.py"
+    "VM_2FA_SETUP.md"
 )
 
 echo -e "${GREEN}Syncing files to VM...${NC}"

@@ -17,7 +17,8 @@ class iCloudUploader:
     """Handles uploading media files to iCloud Photos."""
     
     def __init__(self, apple_id: str, password: str, 
-                 trusted_device_id: Optional[str] = None):
+                 trusted_device_id: Optional[str] = None,
+                 two_fa_code: Optional[str] = None):
         """
         Initialize the iCloud uploader.
         
@@ -25,11 +26,20 @@ class iCloudUploader:
             apple_id: Apple ID email
             password: Apple ID password (empty string will prompt)
             trusted_device_id: Optional trusted device ID for 2FA
+            two_fa_code: Optional 2FA verification code (for non-interactive use)
+                         Can also be set via ICLOUD_2FA_CODE environment variable
         """
         self.apple_id = apple_id
         # Strip password but preserve it - don't convert empty string to None
         self.password = password.strip() if password else ''
         self.trusted_device_id = trusted_device_id
+        # Support 2FA code from parameter, env var, or None for interactive
+        self.two_fa_code = two_fa_code or os.environ.get('ICLOUD_2FA_CODE')
+        if self.two_fa_code:
+            self.two_fa_code = self.two_fa_code.strip().replace(' ', '').replace('-', '')
+        # Also check for trusted_device_id in env if not provided
+        if not self.trusted_device_id:
+            self.trusted_device_id = os.environ.get('ICLOUD_2FA_DEVICE_ID')
         self.api = None
         
         # Prompt for password if empty
@@ -64,6 +74,15 @@ class iCloudUploader:
                 shutil.rmtree(cookie_dir)
             
             os.makedirs(cookie_dir, mode=0o700, exist_ok=True)
+            
+            # Check if cookies exist (might bypass 2FA if still valid)
+            cookie_exists = os.path.exists(cookie_dir) and any(
+                os.path.isfile(os.path.join(cookie_dir, f))
+                for f in os.listdir(cookie_dir) if f.endswith(('.cookie', '.json'))
+            )
+            if cookie_exists:
+                logger.info("Found existing authentication cookies - attempting to use cached session")
+                logger.debug("If cookies are expired or invalid, will fall back to fresh authentication")
             
             # Log authentication attempt (without password)
             logger.info(f"Attempting to authenticate with Apple ID: {self.apple_id}")
@@ -684,19 +703,47 @@ class iCloudUploader:
                     
                     # Get and validate device selection
                     device = None
-                    while True:
+                    # Check if we have a device ID from config/env (non-interactive mode)
+                    if self.trusted_device_id:
                         try:
-                            device_index = input(f"Select device (enter number 0-{len(device_list)-1}): ").strip()
-                            idx = int(device_index)
-                            if 0 <= idx < len(device_list):
-                                device = device_list[idx]
-                                break
+                            device_idx = int(self.trusted_device_id)
+                            if 0 <= device_idx < len(device_list):
+                                device = device_list[device_idx]
+                                logger.info(f"Using configured device ID: {device_idx}")
                             else:
-                                logger.warning(f"Invalid selection. Please enter a number between 0 and {len(device_list)-1}")
+                                raise Exception(f"Invalid trusted_device_id: {self.trusted_device_id}. Valid range: 0-{len(device_list)-1}")
                         except ValueError:
-                            logger.warning("Invalid input. Please enter a number.")
-                        except KeyboardInterrupt:
-                            raise Exception("Device selection cancelled by user")
+                            raise Exception(f"Invalid trusted_device_id format: {self.trusted_device_id}. Must be a number.")
+                    
+                    # If no device selected via config, try interactive input
+                    if device is None:
+                        # Check if we're in a non-interactive environment
+                        import sys
+                        is_interactive = sys.stdin.isatty()
+                        
+                        if not is_interactive and not self.two_fa_code:
+                            raise Exception(
+                                "Non-interactive mode detected but no device ID or 2FA code provided. "
+                                "Set ICLOUD_2FA_DEVICE_ID and ICLOUD_2FA_CODE environment variables, "
+                                "or configure trusted_device_id in config.yaml"
+                            )
+                        
+                        while True:
+                            try:
+                                device_index = input(f"Select device (enter number 0-{len(device_list)-1}): ").strip()
+                                idx = int(device_index)
+                                if 0 <= idx < len(device_list):
+                                    device = device_list[idx]
+                                    break
+                                else:
+                                    logger.warning(f"Invalid selection. Please enter a number between 0 and {len(device_list)-1}")
+                            except ValueError:
+                                logger.warning("Invalid input. Please enter a number.")
+                            except (EOFError, KeyboardInterrupt) as e:
+                                raise Exception(
+                                    "Device selection cancelled. For non-interactive use, set ICLOUD_2FA_DEVICE_ID "
+                                    f"environment variable to a device number (0-{len(device_list)-1})"
+                                )
                     
                     if device is None:
                         raise Exception("No device selected")
@@ -712,32 +759,74 @@ class iCloudUploader:
                 
                 # Allow retries for 2FA code
                 max_attempts = 3
-                logger.info(f"About to prompt for 2FA code (max {max_attempts} attempts)...")
-                for attempt in range(max_attempts):
-                    logger.info(f"Prompting for 2FA code (attempt {attempt + 1}/{max_attempts})...")
-                    try:
-                        code = input(f"Enter 2FA code (attempt {attempt + 1}/{max_attempts}): ").strip()
-                    except (EOFError, KeyboardInterrupt) as e:
-                        logger.error(f"Input error: {e}")
-                        logger.error("Make sure you're running this script interactively (not in background)")
-                        raise
-                    # Remove any spaces or dashes from the code
-                    code = code.replace(' ', '').replace('-', '')
-                    
+                code_validated = False
+                
+                # Check if we have a 2FA code from config/env (non-interactive mode)
+                if self.two_fa_code:
+                    logger.info("Using 2FA code from environment variable/config (non-interactive mode)")
+                    code = self.two_fa_code
                     if self.api.validate_verification_code(device, code):
                         logger.info("✓ Verification code accepted")
-                        break
+                        code_validated = True
                     else:
-                        if attempt < max_attempts - 1:
-                            logger.warning("Invalid verification code. Please try again.")
-                            logger.info("Note: Codes expire quickly. You may need to request a new code.")
-                            retry = input("Request new code? (y/n): ").strip().lower()
-                            if retry == 'y':
-                                if not self.api.send_verification_code(device):
-                                    raise Exception("Failed to send new verification code")
-                                logger.info("New verification code sent")
+                        raise Exception("Invalid 2FA code provided via environment variable/config")
+                
+                # If no code provided, try interactive input
+                if not code_validated:
+                    import sys
+                    is_interactive = sys.stdin.isatty()
+                    
+                    if not is_interactive:
+                        raise Exception(
+                            "Non-interactive mode detected. Set ICLOUD_2FA_CODE environment variable with the "
+                            "verification code, or run interactively. Codes are sent to your trusted device."
+                        )
+                    
+                    logger.info(f"About to prompt for 2FA code (max {max_attempts} attempts)...")
+                    for attempt in range(max_attempts):
+                        logger.info(f"Prompting for 2FA code (attempt {attempt + 1}/{max_attempts})...")
+                        try:
+                            code = input(f"Enter 2FA code (attempt {attempt + 1}/{max_attempts}): ").strip()
+                        except (EOFError, KeyboardInterrupt) as e:
+                            logger.error(f"Input error: {e}")
+                            logger.error("=" * 60)
+                            logger.error("Non-interactive mode detected!")
+                            logger.error("=" * 60)
+                            logger.error("")
+                            logger.error("To use 2FA non-interactively on a VM:")
+                            logger.error("  1. Set ICLOUD_2FA_DEVICE_ID environment variable (device number)")
+                            logger.error("  2. Request a code: The code will be sent to your trusted device")
+                            logger.error("  3. Set ICLOUD_2FA_CODE environment variable with the code")
+                            logger.error("  4. Run the script again")
+                            logger.error("")
+                            logger.error("Example:")
+                            logger.error("  export ICLOUD_2FA_DEVICE_ID=0")
+                            logger.error("  # Request code and check your device...")
+                            logger.error("  export ICLOUD_2FA_CODE=123456")
+                            logger.error("  python3 main.py --config config.yaml")
+                            logger.error("")
+                            raise
+                        # Remove any spaces or dashes from the code
+                        code = code.replace(' ', '').replace('-', '')
+                        
+                        if self.api.validate_verification_code(device, code):
+                            logger.info("✓ Verification code accepted")
+                            code_validated = True
+                            break
                         else:
-                            raise Exception("Invalid verification code after multiple attempts")
+                            if attempt < max_attempts - 1:
+                                logger.warning("Invalid verification code. Please try again.")
+                                logger.info("Note: Codes expire quickly. You may need to request a new code.")
+                                try:
+                                    retry = input("Request new code? (y/n): ").strip().lower()
+                                except (EOFError, KeyboardInterrupt):
+                                    raise Exception("Cannot request new code in non-interactive mode")
+                                if retry == 'y':
+                                    if not self.api.send_verification_code(device):
+                                        raise Exception("Failed to send new verification code")
+                                    logger.info("New verification code sent")
+                            else:
+                                raise Exception("Invalid verification code after multiple attempts")
             
             logger.info("Successfully authenticated with iCloud")
             
@@ -938,20 +1027,40 @@ class iCloudUploader:
                     device_type = device.get('deviceType', 'Unknown') if isinstance(device, dict) else getattr(device, 'deviceType', 'Unknown')
                     logger.info(f"  {i}: {device_name} ({device_type})")
                 
+                # Get device selection (with non-interactive support)
                 device = None
-                while True:
+                if self.trusted_device_id:
                     try:
-                        device_index = input(f"Select device (enter number 0-{len(devices)-1}): ").strip()
-                        idx = int(device_index)
-                        if 0 <= idx < len(devices):
-                            device = devices[idx]
-                            break
+                        device_idx = int(self.trusted_device_id)
+                        if 0 <= device_idx < len(devices):
+                            device = devices[device_idx]
+                            logger.info(f"Using configured device ID: {device_idx}")
                         else:
-                            logger.warning(f"Invalid selection. Please enter a number between 0 and {len(devices)-1}")
+                            raise Exception(f"Invalid trusted_device_id: {self.trusted_device_id}. Valid range: 0-{len(devices)-1}")
                     except ValueError:
-                        logger.warning("Invalid input. Please enter a number.")
-                    except KeyboardInterrupt:
-                        raise Exception("Device selection cancelled by user")
+                        raise Exception(f"Invalid trusted_device_id format: {self.trusted_device_id}. Must be a number.")
+                
+                if device is None:
+                    import sys
+                    is_interactive = sys.stdin.isatty()
+                    if not is_interactive:
+                        raise Exception(
+                            "Non-interactive mode: Set ICLOUD_2FA_DEVICE_ID environment variable or trusted_device_id in config.yaml"
+                        )
+                    
+                    while True:
+                        try:
+                            device_index = input(f"Select device (enter number 0-{len(devices)-1}): ").strip()
+                            idx = int(device_index)
+                            if 0 <= idx < len(devices):
+                                device = devices[idx]
+                                break
+                            else:
+                                logger.warning(f"Invalid selection. Please enter a number between 0 and {len(devices)-1}")
+                        except ValueError:
+                            logger.warning("Invalid input. Please enter a number.")
+                        except (EOFError, KeyboardInterrupt):
+                            raise Exception("Device selection cancelled. Set ICLOUD_2FA_DEVICE_ID for non-interactive use.")
                 
                 if device is None:
                     raise Exception("No device selected")
@@ -962,29 +1071,53 @@ class iCloudUploader:
                     raise Exception("Failed to send verification code")
                 logger.info(f"✓ Verification code sent to {device_name}")
             
-            # Prompt for 2FA code
-            max_attempts = 3
-            for attempt in range(max_attempts):
-                try:
-                    code = input(f"Enter 2FA code (attempt {attempt + 1}/{max_attempts}): ").strip()
-                except (EOFError, KeyboardInterrupt) as e:
-                    logger.error(f"Input error: {e}")
-                    raise
-                code = code.replace(' ', '').replace('-', '')
-                
+            # Prompt for 2FA code (with non-interactive support)
+            code_validated = False
+            if self.two_fa_code:
+                logger.info("Using 2FA code from environment variable/config")
+                code = self.two_fa_code
                 if self.api.validate_verification_code(device, code):
                     logger.info("✓ Verification code accepted")
-                    break
+                    code_validated = True
                 else:
-                    if attempt < max_attempts - 1:
-                        logger.warning("Invalid verification code. Please try again.")
-                        retry = input("Request new code? (y/n): ").strip().lower()
-                        if retry == 'y':
-                            if not self.api.send_verification_code(device):
-                                raise Exception("Failed to send new verification code")
-                            logger.info("New verification code sent")
+                    raise Exception("Invalid 2FA code provided via environment variable/config")
+            
+            if not code_validated:
+                max_attempts = 3
+                import sys
+                is_interactive = sys.stdin.isatty()
+                
+                if not is_interactive:
+                    raise Exception(
+                        "Non-interactive mode: Set ICLOUD_2FA_CODE environment variable with the verification code"
+                    )
+                
+                for attempt in range(max_attempts):
+                    try:
+                        code = input(f"Enter 2FA code (attempt {attempt + 1}/{max_attempts}): ").strip()
+                    except (EOFError, KeyboardInterrupt) as e:
+                        logger.error(f"Input error: {e}")
+                        logger.error("Set ICLOUD_2FA_CODE environment variable for non-interactive use")
+                        raise
+                    code = code.replace(' ', '').replace('-', '')
+                    
+                    if self.api.validate_verification_code(device, code):
+                        logger.info("✓ Verification code accepted")
+                        code_validated = True
+                        break
                     else:
-                        raise Exception("Invalid verification code after multiple attempts")
+                        if attempt < max_attempts - 1:
+                            logger.warning("Invalid verification code. Please try again.")
+                            try:
+                                retry = input("Request new code? (y/n): ").strip().lower()
+                            except (EOFError, KeyboardInterrupt):
+                                raise Exception("Cannot request new code in non-interactive mode")
+                            if retry == 'y':
+                                if not self.api.send_verification_code(device):
+                                    raise Exception("Failed to send new verification code")
+                                logger.info("New verification code sent")
+                        else:
+                            raise Exception("Invalid verification code after multiple attempts")
             
             logger.info("Successfully authenticated with iCloud")
             return  # Exit early since we've handled 2FA

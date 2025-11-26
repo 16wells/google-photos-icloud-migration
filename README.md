@@ -136,8 +136,12 @@ Install ExifTool:
 - Linux: `apt-get install libimage-exiftool-perl` or `yum install perl-Image-ExifTool`
 
 ### 2FA Authentication Issues
-- Use a trusted device ID in config.yaml
-- Or run interactively and enter code when prompted
+- **For VMs/non-interactive use**: See [VM_2FA_SETUP.md](VM_2FA_SETUP.md) for detailed instructions
+- **Getting helpers on VM**: See [GET_HELPERS_ON_VM.md](GET_HELPERS_ON_VM.md) or [QUICK_VM_SETUP.md](QUICK_VM_SETUP.md)
+- **Quick setup**: Run `bash setup-vm-2fa.sh` for an interactive setup wizard
+- **Check status**: Run `python3 check-auth-status.py` to see authentication status
+- Use environment variables: `ICLOUD_2FA_DEVICE_ID` and `ICLOUD_2FA_CODE`
+- Or use trusted device ID in config.yaml and run interactively
 
 ### Upload Failures
 - Failed uploads are automatically saved to `failed_uploads.json` in the base directory

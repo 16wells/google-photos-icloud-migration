@@ -261,7 +261,8 @@ class MigrationOrchestrator:
             self.icloud_uploader = iCloudUploader(
                 apple_id=apple_id,
                 password=password,
-                trusted_device_id=icloud_config.get('trusted_device_id')
+                trusted_device_id=icloud_config.get('trusted_device_id'),
+                two_fa_code=icloud_config.get('two_fa_code')  # Support 2FA code from config or env var
             )
     
     def upload_to_icloud(self, media_json_pairs: Dict[Path, Optional[Path]],
