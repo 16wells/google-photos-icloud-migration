@@ -1,0 +1,11 @@
+{
+  "snapshot": "POPULATED_FROM_SETTINGS",
+  "install": "python3 -m pip install -r requirements.txt",
+  "terminals": [
+    {
+      "name": "Python Environment",
+      "command": "python3 --version && which python3"
+    }
+  ]
+}
+
