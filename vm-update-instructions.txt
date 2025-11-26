@@ -1,0 +1,29 @@
+INSTRUCTIONS FOR UPDATING icloud_uploader.py ON VM
+==================================================
+
+Since Browser SSH has paste size limits, use this Python one-liner:
+
+1. In Browser SSH, run:
+   python3 << 'PYEOF'
+   import base64
+   # [The base64 content will be here - too long to include in this file]
+   # Instead, use the method below
+   PYEOF
+
+BETTER METHOD: Use wget or curl to download from a temporary location
+OR use this simpler approach:
+
+Run this in Browser SSH (it will prompt you to paste):
+
+python3 << 'PYEOF'
+import base64
+print("Paste the base64-encoded file content, then press Ctrl+D:")
+encoded = input()
+content = base64.b64decode(encoded).decode('utf-8')
+with open('icloud_uploader.py', 'w') as f:
+    f.write(content)
+print(f"✓ File created: {len(content)} bytes, {len(content.splitlines())} lines")
+PYEOF
+
+Then paste the base64 content from: icloud_uploader.py.b64
+

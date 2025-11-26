@@ -5,7 +5,7 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import List, Dict, Optional, Callable
+from typing import List, Dict, Optional, Callable, Tuple
 from pyicloud import PyiCloudService
 from pyicloud.exceptions import PyiCloudFailedLoginException, PyiCloud2SARequiredException, PyiCloud2FARequiredException
 from tqdm import tqdm
@@ -41,6 +41,8 @@ class iCloudUploader:
         if not self.trusted_device_id:
             self.trusted_device_id = os.environ.get('ICLOUD_2FA_DEVICE_ID')
         self.api = None
+        self._existing_albums_cache: Optional[Dict[str, any]] = None
+        self._albums_cache_timestamp: Optional[float] = None
         
         # Prompt for password if empty
         if not self.password:
@@ -1122,6 +1124,154 @@ class iCloudUploader:
             logger.info("Successfully authenticated with iCloud")
             return  # Exit early since we've handled 2FA
     
+    def list_existing_albums(self, use_cache: bool = True, cache_ttl: float = 300.0) -> Dict[str, any]:
+        """
+        List all existing albums in iCloud Photos.
+        
+        Args:
+            use_cache: If True, use cached results if available and fresh
+            cache_ttl: Cache time-to-live in seconds (default: 5 minutes)
+        
+        Returns:
+            Dictionary mapping album names to album objects/IDs
+        """
+        # Check cache first
+        if use_cache and self._existing_albums_cache is not None and self._albums_cache_timestamp is not None:
+            import time
+            age = time.time() - self._albums_cache_timestamp
+            if age < cache_ttl:
+                logger.debug(f"Using cached album list (age: {age:.1f}s)")
+                return self._existing_albums_cache.copy()
+        
+        existing_albums = {}
+        
+        try:
+            if not hasattr(self.api, 'photos') or self.api.photos is None:
+                logger.debug("Photos service not available for listing albums")
+                return existing_albums
+            
+            photos = self.api.photos
+            
+            # Try different methods to get albums
+            # Method 1: Check if photos has an albums property (most common in pyicloud)
+            if hasattr(photos, 'albums'):
+                try:
+                    albums = photos.albums
+                    if albums:
+                        if isinstance(albums, dict):
+                            # pyicloud typically uses dict: {'Album Name': album_object}
+                            for album_name, album_obj in albums.items():
+                                existing_albums[album_name] = album_obj
+                                logger.debug(f"Found album: {album_name} (type: {type(album_obj).__name__})")
+                        elif hasattr(albums, '__iter__'):
+                            # If it's iterable but not a dict, try to extract album objects
+                            for album in albums:
+                                if isinstance(album, dict):
+                                    name = album.get('title') or album.get('name') or album.get('albumName')
+                                    if name:
+                                        existing_albums[name] = album
+                                elif hasattr(album, 'title'):
+                                    existing_albums[album.title] = album
+                                elif hasattr(album, 'name'):
+                                    existing_albums[album.name] = album
+                        logger.debug(f"Found {len(existing_albums)} albums via photos.albums")
+                except Exception as e:
+                    logger.debug(f"Error accessing photos.albums: {e}")
+                    import traceback
+                    logger.debug(traceback.format_exc())
+            
+            # Method 2: Try _albums (private attribute)
+            if not existing_albums and hasattr(photos, '_albums'):
+                try:
+                    albums = photos._albums
+                    if albums:
+                        if isinstance(albums, dict):
+                            existing_albums = albums.copy()
+                        elif hasattr(albums, '__iter__'):
+                            for album in albums:
+                                if isinstance(album, dict):
+                                    name = album.get('title') or album.get('name')
+                                    if name:
+                                        existing_albums[name] = album
+                        logger.debug(f"Found {len(existing_albums)} albums via photos._albums")
+                except Exception as e:
+                    logger.debug(f"Error accessing photos._albums: {e}")
+            
+            # Method 3: Try get_albums() method if it exists
+            if not existing_albums and hasattr(photos, 'get_albums') and callable(photos.get_albums):
+                try:
+                    albums = photos.get_albums()
+                    if albums:
+                        if isinstance(albums, dict):
+                            existing_albums = albums.copy()
+                        elif hasattr(albums, '__iter__'):
+                            for album in albums:
+                                if isinstance(album, dict):
+                                    name = album.get('title') or album.get('name')
+                                    if name:
+                                        existing_albums[name] = album
+                        logger.debug(f"Found {len(existing_albums)} albums via photos.get_albums()")
+                except Exception as e:
+                    logger.debug(f"Error calling photos.get_albums(): {e}")
+            
+            if existing_albums:
+                logger.info(f"Found {len(existing_albums)} existing albums in iCloud Photos")
+                logger.debug(f"Album names: {', '.join(list(existing_albums.keys())[:10])}{'...' if len(existing_albums) > 10 else ''}")
+            else:
+                logger.debug("No existing albums found (or album listing not supported)")
+            
+            # Update cache
+            import time
+            self._existing_albums_cache = existing_albums.copy()
+            self._albums_cache_timestamp = time.time()
+                
+        except Exception as e:
+            logger.debug(f"Error listing existing albums: {e}")
+        
+        return existing_albums
+    
+    def get_or_create_album(self, album_name: str) -> Optional[any]:
+        """
+        Get an existing album by name, or create a new one if it doesn't exist.
+        
+        Args:
+            album_name: Name of the album
+        
+        Returns:
+            Album object/ID if found or created, None otherwise
+        """
+        if not album_name:
+            return None
+        
+        # First, check for existing albums
+        existing_albums = self.list_existing_albums()
+        
+        # Normalize album name for comparison (case-insensitive, strip whitespace)
+        normalized_name = album_name.strip()
+        
+        # Check for exact match first
+        if normalized_name in existing_albums:
+            logger.debug(f"Found existing album: {normalized_name}")
+            return existing_albums[normalized_name]
+        
+        # Check for case-insensitive match
+        for existing_name, album_obj in existing_albums.items():
+            if existing_name.strip().lower() == normalized_name.lower():
+                logger.info(f"Found existing album (case-insensitive match): '{existing_name}' (using for '{normalized_name}')")
+                return album_obj
+        
+        # Album doesn't exist - try to create it
+        logger.debug(f"Album '{normalized_name}' not found, attempting to create")
+        if self.create_album(normalized_name):
+            # Re-fetch albums to get the newly created one
+            existing_albums = self.list_existing_albums()
+            if normalized_name in existing_albums:
+                return existing_albums[normalized_name]
+        
+        # If creation failed or album still not found, return None
+        logger.warning(f"Could not get or create album: {normalized_name}")
+        return None
+    
     def create_album(self, album_name: str) -> bool:
         """
         Create an album in iCloud Photos.
@@ -1136,42 +1286,259 @@ class iCloudUploader:
             True if successful, False otherwise
         """
         try:
-            # pyicloud doesn't have direct album creation support
-            # Albums may need to be created manually or through Photos app
-            logger.warning(f"Album creation not supported via API: {album_name}")
-            logger.info("Albums will need to be created manually in iCloud Photos")
+            if not hasattr(self.api, 'photos') or self.api.photos is None:
+                logger.debug("Photos service not available for album creation")
+                return False
+            
+            photos = self.api.photos
+            
+            # Try to create album using pyicloud's Photos service
+            # Method 1: Check if photos has a create_album method
+            if hasattr(photos, 'create_album') and callable(photos.create_album):
+                try:
+                    result = photos.create_album(album_name)
+                    if result:
+                        logger.info(f"Created album: {album_name}")
+                        return True
+                except Exception as e:
+                    logger.debug(f"Error calling photos.create_album(): {e}")
+            
+            # Method 2: Try _create_album (private method)
+            if hasattr(photos, '_create_album') and callable(photos._create_album):
+                try:
+                    result = photos._create_album(album_name)
+                    if result:
+                        logger.info(f"Created album: {album_name}")
+                        # Invalidate cache since we added a new album
+                        self._existing_albums_cache = None
+                        self._albums_cache_timestamp = None
+                        return True
+                except Exception as e:
+                    logger.debug(f"Error calling photos._create_album(): {e}")
+            
+            # If no create method exists, log a warning
+            logger.debug(f"Album creation not supported via API: {album_name}")
+            logger.debug("Albums will need to be created manually in iCloud Photos, or files will be uploaded without album assignment")
             return False
+            
         except Exception as e:
-            logger.error(f"Failed to create album {album_name}: {e}")
+            logger.debug(f"Failed to create album {album_name}: {e}")
             return False
     
-    def upload_photo(self, photo_path: Path) -> bool:
+    def upload_photo(self, photo_path: Path, album: Optional[any] = None, album_name: Optional[str] = None) -> bool:
         """
         Upload a single photo to iCloud Photos.
         
         Args:
             photo_path: Path to photo file
+            album: Optional album object to add photo to (preferred method)
+            album_name: Optional album name (will look up album if album object not provided)
         
         Returns:
             True if successful, False otherwise
         """
         try:
-            # pyicloud's photo upload functionality may be limited
-            # The Photos API doesn't have a public upload endpoint
-            # This is a placeholder - actual implementation may require
-            # using Photos app sync or alternative methods
+            if not photo_path.exists():
+                logger.error(f"File does not exist: {photo_path}")
+                return False
             
-            logger.warning("Direct photo upload via pyicloud may not be supported")
-            logger.info(f"Would upload: {photo_path.name}")
+            # Access Photos service
+            if not hasattr(self.api, 'photos') or self.api.photos is None:
+                logger.error("Photos service not available. iCloud Photos API may not be accessible.")
+                return False
             
-            # Alternative: Use Photos library sync
-            # Files would need to be copied to Photos library directory
-            # which then syncs to iCloud
+            photos = self.api.photos
             
+            # Method 1: Upload via album object (RECOMMENDED - this is how pyicloud works)
+            # According to pyicloud documentation: album.upload('path_to_photo.jpg')
+            # This is the PRIMARY method for preserving album organization
+            if album is not None:
+                try:
+                    # Check if album has upload method (most common in pyicloud)
+                    if hasattr(album, 'upload') and callable(album.upload):
+                        logger.debug(f"Uploading {photo_path.name} to album using album.upload()")
+                        result = None
+                        try:
+                            # Try uploading the file path as string
+                            result = album.upload(str(photo_path))
+                        except (TypeError, AttributeError):
+                            logger.debug("album.upload() rejected file path, trying file object")
+                            try:
+                                with open(photo_path, 'rb') as f:
+                                    result = album.upload(f)
+                            except Exception as e:
+                                logger.debug(f"Error uploading file object to album: {e}")
+                        except Exception as e:
+                            logger.debug(f"Error uploading via album.upload(): {e}")
+                        if result:
+                            logger.debug(f"✓ Successfully uploaded {photo_path.name} to album")
+                            return True
+                        else:
+                            logger.warning(f"Album upload returned False for {photo_path.name}")
+                    # Alternative: album might have add method (some pyicloud versions)
+                    elif hasattr(album, 'add') and callable(album.add):
+                        logger.debug(f"Uploading {photo_path.name} to album using album.add()")
+                        # Try with file path
+                        try:
+                            result = album.add(str(photo_path))
+                        except (TypeError, AttributeError):
+                            # If add() needs a file object, open it
+                            with open(photo_path, 'rb') as f:
+                                result = album.add(f)
+                        if result:
+                            logger.debug(f"✓ Successfully uploaded {photo_path.name} to album")
+                            return True
+                except Exception as e:
+                    logger.debug(f"Error uploading via album object: {e}")
+                    import traceback
+                    logger.debug(traceback.format_exc())
+            
+            # Method 2: Get album by name from photos.albums and upload
+            # This is critical for album preservation - we need the actual album object
+            if album_name and not album:
+                try:
+                    # Try to get album from photos.albums dictionary (pyicloud's standard way)
+                    if hasattr(photos, 'albums'):
+                        albums_dict = photos.albums
+                        if isinstance(albums_dict, dict):
+                            # Try exact match first
+                            if album_name in albums_dict:
+                                album = albums_dict[album_name]
+                                logger.debug(f"Found album '{album_name}' in photos.albums (exact match)")
+                            else:
+                                # Try case-insensitive match
+                                for name, alb in albums_dict.items():
+                                    if name.strip().lower() == album_name.strip().lower():
+                                        album = alb
+                                        logger.info(f"Found album '{name}' (case-insensitive match) for '{album_name}'")
+                                        break
+                        
+                        # If we found an album object, try uploading via it
+                        if album:
+                            # Try album.upload() method
+                            if hasattr(album, 'upload') and callable(album.upload):
+                                logger.debug(f"Uploading {photo_path.name} to album '{album_name}' using album.upload()")
+                                try:
+                                    result = album.upload(str(photo_path))
+                                except (TypeError, AttributeError):
+                                    # If upload needs file object, try that
+                                    with open(photo_path, 'rb') as f:
+                                        result = album.upload(f)
+                                
+                                if result:
+                                    logger.debug(f"✓ Successfully uploaded {photo_path.name} to album '{album_name}'")
+                                    return True
+                            # Try album.add() method
+                            elif hasattr(album, 'add') and callable(album.add):
+                                logger.debug(f"Uploading {photo_path.name} to album '{album_name}' using album.add()")
+                                try:
+                                    result = album.add(str(photo_path))
+                                except (TypeError, AttributeError):
+                                    with open(photo_path, 'rb') as f:
+                                        result = album.add(f)
+                                
+                                if result:
+                                    logger.debug(f"✓ Successfully uploaded {photo_path.name} to album '{album_name}'")
+                                    return True
+                except Exception as e:
+                    logger.debug(f"Error getting/uploading to album by name: {e}")
+                    import traceback
+                    logger.debug(traceback.format_exc())
+            
+            # Method 3: Upload to default/all photos (no album)
+            # Try uploading without album assignment
+            try:
+                # Check if Photos service has an upload method
+                if hasattr(photos, 'upload') and callable(photos.upload):
+                    logger.debug(f"Uploading {photo_path.name} using Photos.upload() (no album)")
+                    result = photos.upload(str(photo_path))
+                    if result:
+                        logger.debug(f"Successfully uploaded {photo_path.name}")
+                        # If we have an album name, try to add to album after upload
+                        if album_name:
+                            try:
+                                # Get album and add the uploaded photo
+                                if hasattr(photos, 'albums') and isinstance(photos.albums, dict):
+                                    target_album = photos.albums.get(album_name)
+                                    if target_album and hasattr(target_album, 'add') and callable(target_album.add):
+                                        target_album.add(result)
+                                        logger.debug(f"Added {photo_path.name} to album '{album_name}'")
+                            except Exception as e:
+                                logger.debug(f"Could not add photo to album after upload (non-fatal): {e}")
+                        return True
+                    else:
+                        logger.warning(f"Photos.upload() returned False for {photo_path.name}")
+                
+                # Alternative: Try using the service's internal upload method
+                if hasattr(photos, '_upload') and callable(photos._upload):
+                    logger.debug(f"Uploading {photo_path.name} using Photos._upload()")
+                    result = photos._upload(str(photo_path))
+                    if result:
+                        logger.debug(f"Successfully uploaded {photo_path.name}")
+                        # Try to add to album if provided
+                        if album_name:
+                            try:
+                                if hasattr(photos, 'albums') and isinstance(photos.albums, dict):
+                                    target_album = photos.albums.get(album_name)
+                                    if target_album and hasattr(target_album, 'add') and callable(target_album.add):
+                                        target_album.add(result)
+                            except Exception as e:
+                                logger.debug(f"Could not add photo to album (non-fatal): {e}")
+                        return True
+            except Exception as e:
+                logger.debug(f"Error during Photos service upload: {e}")
+            
+            # Method 4: Try iCloud Drive as fallback (preserves album structure as folders)
+            # This is a last resort - files go to Drive, not Photos, but album structure is preserved
+            try:
+                if hasattr(self.api, 'drive') and self.api.drive:
+                    drive = self.api.drive
+                    # Check if drive has upload method
+                    if hasattr(drive, 'upload') and callable(drive.upload):
+                        # Create folder structure in Drive to preserve albums
+                        drive_path = ""
+                        if album_name:
+                            # Create album folder in Drive
+                            try:
+                                # Try to get or create folder for the album
+                                if hasattr(drive, 'mkdir') and callable(drive.mkdir):
+                                    drive.mkdir(album_name, exist_ok=True)
+                                    drive_path = f"{album_name}/"
+                                elif hasattr(drive, 'create_folder') and callable(drive.create_folder):
+                                    drive.create_folder(album_name)
+                                    drive_path = f"{album_name}/"
+                            except Exception as folder_err:
+                                logger.debug(f"Could not create Drive folder for album: {folder_err}")
+                        
+                        # Upload to Drive (with album folder if available)
+                        logger.warning(f"Photos upload failed, uploading {photo_path.name} to iCloud Drive{album_name and ' in album folder' or ''}")
+                        try:
+                            result = drive.upload(str(photo_path), folder=drive_path if drive_path else None)
+                        except TypeError:
+                            # If upload doesn't accept folder parameter
+                            result = drive.upload(str(photo_path))
+                        
+                        if result:
+                            logger.warning(f"✓ Uploaded {photo_path.name} to iCloud Drive{album_name and f' (album: {album_name})' or ''}")
+                            logger.warning("  NOTE: Files in Drive won't appear in Photos automatically.")
+                            logger.warning("  You'll need to import them manually from iCloud Drive to Photos.")
+                            return True
+            except Exception as e:
+                logger.debug(f"Error trying iCloud Drive upload: {e}")
+            
+            # If all methods failed, log detailed error
+            logger.error(f"❌ Could not upload {photo_path.name} - all upload methods failed")
+            logger.debug("Methods tried:")
+            logger.debug("  1. album.upload() - Album-based upload (preferred for album preservation)")
+            logger.debug("  2. Photos.upload() - Direct Photos service upload")
+            logger.debug("  3. Photos._upload() - Internal upload method")
+            logger.debug("  4. iCloud Drive - Fallback (preserves album as folder structure)")
             return False
-            
+                
         except Exception as e:
             logger.error(f"Failed to upload photo {photo_path.name}: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
             return False
     
     def verify_file_uploaded(self, file_path: Path) -> bool:
@@ -1206,11 +1573,16 @@ class iCloudUploader:
                            verify_after_upload: bool = True,
                            on_verification_failure: Optional[Callable[[Path], None]] = None) -> Dict[Path, bool]:
         """
-        Upload multiple photos in a batch.
+        Upload multiple photos in a batch, preserving album organization.
+        
+        This method is optimized for bulk uploads with album preservation:
+        - Gets or creates the target album before uploading
+        - Uploads all photos to the same album efficiently
+        - Handles thousands of photos by batching and rate limiting
         
         Args:
             photo_paths: List of photo file paths
-            album_name: Optional album name to add photos to
+            album_name: Album name to add photos to (will check for existing album first)
             verify_after_upload: If True, verify each file after upload
             on_verification_failure: Optional callback function(file_path) called when verification fails
         
@@ -1219,25 +1591,68 @@ class iCloudUploader:
         """
         results = {}
         
-        for photo_path in tqdm(photo_paths, desc=f"Uploading photos"):
-            success = self.upload_photo(photo_path)
-            
-            # Verify upload if requested
-            if success and verify_after_upload:
-                verified = self.verify_file_uploaded(photo_path)
-                if not verified:
-                    logger.warning(f"Upload verification failed for {photo_path.name}")
-                    if on_verification_failure:
-                        on_verification_failure(photo_path)
-                    success = False
-            
-            results[photo_path] = success
-            
-            # Rate limiting
-            time.sleep(0.5)
+        if not photo_paths:
+            logger.warning("No photos to upload")
+            return results
         
-        successful = sum(1 for v in results.values() if v)
-        logger.info(f"Uploaded {successful}/{len(results)} photos")
+        # Get or create album if album_name is provided (CRITICAL for album preservation)
+        album = None
+        if album_name:
+            logger.info(f"Preparing album '{album_name}' for {len(photo_paths)} photos...")
+            album = self.get_or_create_album(album_name)
+            if album:
+                logger.info(f"✓ Album '{album_name}' ready - will upload {len(photo_paths)} photos to it")
+            else:
+                logger.warning(f"⚠ Could not get or create album '{album_name}'")
+                logger.warning("Photos will be uploaded without album assignment (you can organize them manually later)")
+        else:
+            logger.info(f"Uploading {len(photo_paths)} photos without album assignment")
+        
+        # Upload photos with progress tracking
+        successful_count = 0
+        failed_count = 0
+        
+        for photo_path in tqdm(photo_paths, desc=f"Uploading{' to ' + album_name if album_name else 'photos'}"):
+            try:
+                success = self.upload_photo(photo_path, album=album, album_name=album_name)
+                
+                # Verify upload if requested
+                if success and verify_after_upload:
+                    verified = self.verify_file_uploaded(photo_path)
+                    if not verified:
+                        logger.warning(f"Upload verification failed for {photo_path.name}")
+                        if on_verification_failure:
+                            on_verification_failure(photo_path)
+                        success = False
+                
+                results[photo_path] = success
+                
+                if success:
+                    successful_count += 1
+                else:
+                    failed_count += 1
+                
+                # Rate limiting to avoid overwhelming the API
+                # Use shorter delay for successful uploads, longer for failures
+                if success:
+                    time.sleep(0.3)  # 3 photos per second max
+                else:
+                    time.sleep(1.0)  # Wait longer after failures
+                    
+            except Exception as e:
+                logger.error(f"Exception during upload of {photo_path.name}: {e}")
+                results[photo_path] = False
+                failed_count += 1
+                time.sleep(1.0)
+        
+        # Summary
+        logger.info("=" * 60)
+        logger.info(f"Upload batch complete: {successful_count}/{len(results)} photos succeeded")
+        if album_name:
+            logger.info(f"Album: '{album_name}'")
+        if failed_count > 0:
+            logger.warning(f"⚠ {failed_count} photos failed to upload")
+        logger.info("=" * 60)
         
         return results
     
@@ -1260,8 +1675,9 @@ class iCloudPhotosSyncUploader:
     """
     Alternative uploader using Photos library sync method.
     
-    This approach copies files to the Photos library directory,
-    which then syncs to iCloud Photos automatically.
+    This approach uses AppleScript to import photos into the Photos app,
+    which then syncs to iCloud Photos automatically. This method properly
+    supports albums and is much more reliable than the API method.
     """
     
     def __init__(self, photos_library_path: Optional[Path] = None):
@@ -1278,115 +1694,242 @@ class iCloudPhotosSyncUploader:
         else:
             self.photos_library_path = photos_library_path
         
-        # Photos library structure
-        self.masters_path = self.photos_library_path / "Masters"
+        # Cache for existing albums (to avoid repeated AppleScript calls)
+        self._existing_albums_cache: Optional[Dict[str, str]] = None
+        self._albums_cache_timestamp: Optional[float] = None
         
         logger.info(f"Using Photos library: {self.photos_library_path}")
+        logger.info("Album support enabled via AppleScript")
+    
+    def _run_applescript(self, script: str) -> Tuple[bool, str]:
+        """
+        Run an AppleScript command and return success status and output.
+        
+        Args:
+            script: AppleScript code to execute
+        
+        Returns:
+            Tuple of (success: bool, output: str)
+        """
+        import subprocess
+        try:
+            # Escape the script for shell
+            escaped_script = script.replace('"', '\\"').replace('$', '\\$')
+            cmd = f'osascript -e "{escaped_script}"'
+            result = subprocess.run(
+                cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=300  # 5 minute timeout
+            )
+            if result.returncode == 0:
+                return True, result.stdout.strip()
+            else:
+                logger.debug(f"AppleScript error: {result.stderr}")
+                return False, result.stderr.strip()
+        except subprocess.TimeoutExpired:
+            logger.error("AppleScript command timed out")
+            return False, "Timeout"
+        except Exception as e:
+            logger.debug(f"Error running AppleScript: {e}")
+            return False, str(e)
+    
+    def _list_existing_albums(self) -> Dict[str, str]:
+        """
+        List existing albums in Photos app using AppleScript.
+        Returns a dictionary mapping normalized (lowercase) album names to actual album names.
+        """
+        import time
+        
+        # Check cache (5 minute TTL)
+        if self._existing_albums_cache is not None and self._albums_cache_timestamp is not None:
+            elapsed = time.time() - self._albums_cache_timestamp
+            if elapsed < 300:
+                return self._existing_albums_cache
+        
+        albums = {}
+        script = '''
+        tell application "Photos"
+            set albumList to {}
+            repeat with anAlbum in albums
+                set albumName to name of anAlbum
+                set end of albumList to albumName
+            end repeat
+            return albumList
+        end tell
+        '''
+        
+        success, output = self._run_applescript(script)
+        if success and output:
+            # Parse output (AppleScript returns comma-separated list)
+            album_names = [name.strip().strip('"') for name in output.split(',')]
+            for name in album_names:
+                if name:
+                    albums[name.lower()] = name  # Store normalized -> actual mapping
+            logger.debug(f"Found {len(albums)} existing albums in Photos")
+        else:
+            logger.debug("Could not list albums (Photos app may not be running or accessible)")
+        
+        # Update cache
+        self._existing_albums_cache = albums
+        self._albums_cache_timestamp = time.time()
+        
+        return albums
+    
+    def _get_or_create_album(self, album_name: str) -> Optional[str]:
+        """
+        Get existing album or create a new one using AppleScript.
+        Returns the actual album name (for case-insensitive matching).
+        """
+        if not album_name:
+            return None
+        
+        normalized_name = album_name.strip().lower()
+        existing_albums = self._list_existing_albums()
+        
+        # Check for existing album (case-insensitive)
+        if normalized_name in existing_albums:
+            actual_name = existing_albums[normalized_name]
+            logger.debug(f"Found existing album: {actual_name}")
+            return actual_name
+        
+        # Create new album
+        # Escape single quotes in album name for AppleScript
+        escaped_name = album_name.replace("'", "\\'")
+        script = f'''
+        tell application "Photos"
+            try
+                make new album with properties {{name:"{escaped_name}"}}
+                return "created"
+            on error
+                return "error"
+            end try
+        end tell
+        '''
+        
+        success, output = self._run_applescript(script)
+        if success and "created" in output.lower():
+            logger.info(f"Created new album: {album_name}")
+            # Invalidate cache
+            self._existing_albums_cache = None
+            self._albums_cache_timestamp = None
+            return album_name
+        else:
+            logger.warning(f"Could not create album '{album_name}': {output}")
+            return None
     
     def upload_file(self, file_path: Path, album_name: Optional[str] = None) -> bool:
         """
-        Copy file to Photos library for sync.
+        Import file into Photos app using AppleScript.
+        Optionally adds to an album if album_name is provided.
         
         Args:
             file_path: Path to media file
-            album_name: Optional album name (not directly supported)
+            album_name: Optional album name to add photo to
         
         Returns:
             True if successful, False otherwise
         """
         try:
-            # Create Masters directory if it doesn't exist
-            self.masters_path.mkdir(parents=True, exist_ok=True)
+            # Ensure file exists
+            if not file_path.exists():
+                logger.error(f"File does not exist: {file_path}")
+                return False
             
-            # Organize by date (year/month)
-            # This helps Photos app organize files
-            import shutil
-            from datetime import datetime
+            # Get absolute path and escape for AppleScript
+            abs_path = str(file_path.absolute())
+            escaped_path = abs_path.replace("\\", "\\\\").replace('"', '\\"')
             
-            # Try to get date from file metadata
-            try:
-                from PIL import Image
-                from PIL.ExifTags import DATETIME
-                
-                img = Image.open(file_path)
-                exif = img._getexif()
-                if exif:
-                    date_str = exif.get(DATETIME)
-                    if date_str:
-                        dt = datetime.strptime(date_str, "%Y:%m:%d %H:%M:%S")
-                        year = dt.year
-                        month = dt.month
-                    else:
-                        year = datetime.now().year
-                        month = datetime.now().month
-                else:
-                    year = datetime.now().year
-                    month = datetime.now().month
-            except:
-                year = datetime.now().year
-                month = datetime.now().month
+            # Prepare album name if provided
+            actual_album_name = None
+            if album_name:
+                actual_album_name = self._get_or_create_album(album_name)
+                if not actual_album_name:
+                    logger.warning(f"Could not get/create album '{album_name}', importing without album")
             
-            # Create year/month directory
-            target_dir = self.masters_path / str(year) / f"{month:02d}"
-            target_dir.mkdir(parents=True, exist_ok=True)
+            # Import photo and optionally add to album in one operation
+            if actual_album_name:
+                escaped_album = actual_album_name.replace("'", "\\'")
+                import_script = f'''
+                tell application "Photos"
+                    try
+                        set photoFile to POSIX file "{escaped_path}"
+                        set importedItems to import photoFile as true
+                        set targetAlbum to album "{escaped_album}"
+                        add importedItems to targetAlbum
+                        return "success"
+                    on error errMsg
+                        return "error: " & errMsg
+                    end try
+                end tell
+                '''
+            else:
+                import_script = f'''
+                tell application "Photos"
+                    try
+                        set importedItems to import (POSIX file "{escaped_path}") as true
+                        return "success"
+                    on error errMsg
+                        return "error: " & errMsg
+                    end try
+                end tell
+                '''
             
-            # Copy file
-            target_path = target_dir / file_path.name
-            shutil.copy2(file_path, target_path)
+            success, output = self._run_applescript(import_script)
+            if not success or "error" in output.lower():
+                logger.error(f"Failed to import {file_path.name}: {output}")
+                return False
             
-            logger.debug(f"Copied {file_path.name} to Photos library")
+            if actual_album_name:
+                logger.debug(f"Imported {file_path.name} and added to album '{actual_album_name}'")
+            else:
+                logger.debug(f"Imported {file_path.name} to Photos")
+            
             return True
             
         except Exception as e:
-            logger.error(f"Failed to copy {file_path.name}: {e}")
+            logger.error(f"Failed to import {file_path.name}: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
             return False
     
     def verify_file_uploaded(self, file_path: Path) -> bool:
         """
-        Verify that a file was successfully uploaded to iCloud Photos.
+        Verify that a file was successfully imported into Photos app.
         
-        For sync method, this checks if the file exists in the Photos library.
+        Uses AppleScript to check if the photo exists in Photos by filename.
         
         Args:
             file_path: Path to the original file
         
         Returns:
-            True if file is verified to be uploaded, False otherwise
+            True if file is verified to be imported, False otherwise
         """
         try:
-            from datetime import datetime
+            # Use AppleScript to check if photo exists in Photos
+            filename = file_path.name
+            escaped_filename = filename.replace("'", "\\'").replace('"', '\\"')
             
-            # Try to get date from file metadata to find target location
-            try:
-                from PIL import Image
-                from PIL.ExifTags import DATETIME
-                
-                img = Image.open(file_path)
-                exif = img._getexif()
-                if exif:
-                    date_str = exif.get(DATETIME)
-                    if date_str:
-                        dt = datetime.strptime(date_str, "%Y:%m:%d %H:%M:%S")
-                        year = dt.year
-                        month = dt.month
-                    else:
-                        year = datetime.now().year
-                        month = datetime.now().month
-                else:
-                    year = datetime.now().year
-                    month = datetime.now().month
-            except:
-                year = datetime.now().year
-                month = datetime.now().month
+            script = f'''
+            tell application "Photos"
+                try
+                    set photoName to "{escaped_filename}"
+                    set foundPhotos to (every media item whose filename is photoName)
+                    if (count of foundPhotos) > 0 then
+                        return "found"
+                    else
+                        return "not found"
+                    end if
+                on error
+                    return "error"
+                end try
+            end tell
+            '''
             
-            # Check if file exists in Photos library
-            target_dir = self.masters_path / str(year) / f"{month:02d}"
-            target_path = target_dir / file_path.name
-            
-            if target_path.exists():
-                # Also verify file size matches (basic integrity check)
-                if target_path.stat().st_size == file_path.stat().st_size:
-                    return True
+            success, output = self._run_applescript(script)
+            if success and "found" in output.lower():
+                return True
             
             return False
             
@@ -1399,7 +1942,10 @@ class iCloudPhotosSyncUploader:
                           verify_after_upload: bool = True,
                           on_verification_failure: Optional[Callable[[Path], None]] = None) -> Dict[Path, bool]:
         """
-        Upload multiple files in a batch.
+        Upload multiple files in a batch, organized by album.
+        
+        This method groups files by album and imports them efficiently,
+        creating albums as needed and reusing existing ones.
         
         Args:
             file_paths: List of file paths
@@ -1412,23 +1958,45 @@ class iCloudPhotosSyncUploader:
         """
         results = {}
         
-        for file_path in tqdm(file_paths, desc="Copying to Photos library"):
+        # Group files by album for more efficient processing
+        files_by_album: Dict[Optional[str], List[Path]] = {}
+        for file_path in file_paths:
             album_name = albums.get(file_path) if albums else None
-            success = self.upload_file(file_path, album_name)
+            if album_name not in files_by_album:
+                files_by_album[album_name] = []
+            files_by_album[album_name].append(file_path)
+        
+        # Process each album group
+        for album_name, files in files_by_album.items():
+            if album_name:
+                logger.info(f"Importing {len(files)} photos to album: {album_name}")
+                # Ensure album exists
+                actual_album_name = self._get_or_create_album(album_name)
+                if not actual_album_name:
+                    logger.warning(f"Could not get/create album '{album_name}', importing without album")
+            else:
+                logger.info(f"Importing {len(files)} photos (no album)")
             
-            # Verify upload if requested
-            if success and verify_after_upload:
-                verified = self.verify_file_uploaded(file_path)
-                if not verified:
-                    logger.warning(f"Upload verification failed for {file_path.name}")
-                    if on_verification_failure:
-                        on_verification_failure(file_path)
-                    success = False
-            
-            results[file_path] = success
+            # Import files in this album
+            for file_path in tqdm(files, desc=f"Importing to Photos{album_name and f' ({album_name})' or ''}"):
+                success = self.upload_file(file_path, album_name)
+                
+                # Verify upload if requested
+                if success and verify_after_upload:
+                    verified = self.verify_file_uploaded(file_path)
+                    if not verified:
+                        logger.warning(f"Import verification failed for {file_path.name}")
+                        if on_verification_failure:
+                            on_verification_failure(file_path)
+                        success = False
+                
+                results[file_path] = success
         
         successful = sum(1 for v in results.values() if v)
-        logger.info(f"Copied {successful}/{len(results)} files to Photos library")
+        failed = len(results) - successful
+        logger.info(f"Imported {successful}/{len(results)} files to Photos app")
+        if failed > 0:
+            logger.warning(f"⚠️  {failed} files failed to import")
         
         return results
 

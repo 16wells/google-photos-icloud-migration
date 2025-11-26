@@ -68,6 +68,9 @@ class MigrationOrchestrator:
         
         # Verification failure handling
         self.ignore_all_verification_failures = False
+        
+        # Continue prompt handling
+        self._skip_continue_prompts = False
     
     def _load_config(self, config_path: str) -> Dict:
         """Load configuration from YAML file."""
@@ -336,6 +339,65 @@ class MigrationOrchestrator:
         
         return results
     
+    def _ask_continue_after_zip(self, processed_count: int, total_zips: int) -> bool:
+        """
+        Ask user if they want to continue processing after a zip file is completed.
+        
+        Args:
+            processed_count: Number of zip files processed so far
+            total_zips: Total number of zip files to process
+        
+        Returns:
+            True if user wants to continue, False if they want to stop
+        """
+        # Check if we're in a non-interactive environment
+        import sys
+        is_interactive = sys.stdin.isatty()
+        
+        if not is_interactive:
+            # In non-interactive mode (e.g., VM), continue automatically
+            logger.debug("Non-interactive mode detected, continuing automatically")
+            return True
+        
+        # Check if this is the last zip file
+        if processed_count >= total_zips:
+            logger.info("All zip files processed!")
+            return True
+        
+        remaining = total_zips - processed_count
+        logger.info("")
+        logger.info("=" * 60)
+        logger.info(f"Completed processing zip {processed_count}/{total_zips}")
+        logger.info(f"Remaining: {remaining} zip file(s)")
+        logger.info("=" * 60)
+        logger.info("")
+        logger.info("What would you like to do?")
+        logger.info("  (C) Continue - Process the next zip file")
+        logger.info("  (A) Continue All - Process all remaining zip files without asking")
+        logger.info("  (S) Stop - Stop processing and exit")
+        logger.info("")
+        
+        while True:
+            try:
+                choice = input("Enter your choice (C/A/S): ").strip().upper()
+                if choice == 'C':
+                    logger.info("Continuing to next zip file...")
+                    return True
+                elif choice == 'A':
+                    logger.info("Continuing to process all remaining zip files without further prompts...")
+                    # Set a flag to skip future prompts
+                    self._skip_continue_prompts = True
+                    return True
+                elif choice == 'S':
+                    logger.info("Stopping migration as requested.")
+                    return False
+                else:
+                    logger.warning("Invalid choice. Please enter C (Continue), A (Continue All), or S (Stop).")
+            except (EOFError, KeyboardInterrupt) as e:
+                logger.warning("")
+                logger.warning("Input interrupted. Stopping migration.")
+                return False
+    
     def _handle_verification_failure(self, file_path: Path) -> str:
         """
         Handle verification failure by prompting the user.
@@ -596,20 +658,29 @@ class MigrationOrchestrator:
             if self.icloud_uploader is None:
                 self.setup_icloud_uploader(use_sync_method=use_sync_method)
             
-            # Build file-to-album mapping
-            file_to_album = {}
+            # Build file-to-album mapping from original files
+            original_file_to_album = {}
             for album_name, files in albums.items():
                 for file_path in files:
-                    file_to_album[file_path] = album_name
+                    original_file_to_album[file_path] = album_name
             
-            # Get processed files
+            # Get processed files and build mapping from processed files to albums
             processed_files = []
+            file_to_album = {}  # Maps processed/original file paths to album names
             for media_file in media_json_pairs.keys():
                 processed_file = processed_dir / media_file.name
                 if processed_file.exists():
                     processed_files.append(processed_file)
+                    # Map processed file to album using original file's album
+                    album_name = original_file_to_album.get(media_file, '')
+                    if album_name:
+                        file_to_album[processed_file] = album_name
                 else:
                     processed_files.append(media_file)
+                    # Map original file to album
+                    album_name = original_file_to_album.get(media_file, '')
+                    if album_name:
+                        file_to_album[media_file] = album_name
             
             # Create verification failure callback
             def verification_failure_callback(failed_file_path: Path):
@@ -627,17 +698,30 @@ class MigrationOrchestrator:
                     on_verification_failure=verification_failure_callback
                 )
             else:
-                # Group by album
+                # Group by album using file_to_album mapping
                 upload_results = {}
-                for album_name, files in albums.items():
-                    # Map to processed files
-                    processed_album_files = [f for f in processed_files 
-                                           if file_to_album.get(f, '') == album_name]
-                    if processed_album_files:
-                        logger.info(f"Uploading album: {album_name} ({len(processed_album_files)} files)")
+                # Group processed files by album
+                files_by_album = {}
+                for file_path in processed_files:
+                    album_name = file_to_album.get(file_path, '')
+                    if album_name:
+                        if album_name not in files_by_album:
+                            files_by_album[album_name] = []
+                        files_by_album[album_name].append(file_path)
+                    else:
+                        # Files without album go to default/root
+                        if '' not in files_by_album:
+                            files_by_album[''] = []
+                        files_by_album[''].append(file_path)
+                
+                # Upload each album
+                for album_name, files in files_by_album.items():
+                    if files:
+                        display_name = album_name if album_name else '(no album)'
+                        logger.info(f"Uploading album: {display_name} ({len(files)} files)")
                         album_results = self.icloud_uploader.upload_photos_batch(
-                            processed_album_files,
-                            album_name=album_name,
+                            files,
+                            album_name=album_name if album_name else None,
                             verify_after_upload=True,
                             on_verification_failure=verification_failure_callback
                         )
@@ -774,6 +858,12 @@ class MigrationOrchestrator:
                     else:
                         failed += 1
                         logger.warning(f"Failed to process {existing_zip.name}, keeping zip file for retry")
+                    
+                    # Ask user if they want to continue after each zip (unless they chose "Continue All")
+                    if not self._skip_continue_prompts:
+                        if not self._ask_continue_after_zip(processed_count, total_zips):
+                            logger.info("Migration stopped by user after zip file processing.")
+                            return
                         
                 except MigrationStoppedException as e:
                     logger.info("Migration stopped by user.")
@@ -812,6 +902,12 @@ class MigrationOrchestrator:
                     else:
                         failed += 1
                         logger.warning(f"Failed to process {zip_file.name}, keeping zip file for retry")
+                    
+                    # Ask user if they want to continue after each zip (unless they chose "Continue All")
+                    if not self._skip_continue_prompts:
+                        if not self._ask_continue_after_zip(processed_count, total_zips):
+                            logger.info("Migration stopped by user after zip file processing.")
+                            return
                         
                 except MigrationStoppedException as e:
                     logger.info("Migration stopped by user.")

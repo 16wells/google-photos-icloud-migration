@@ -169,3 +169,4 @@ echo "1. Review $OUTPUT_DIR/INSTRUCTIONS.txt"
 echo "2. Copy chunks to VM using Browser SSH"
 echo "3. Run reassemble.sh on the VM"
 
+

@@ -169,3 +169,4 @@ If files still don't match after updating:
 3. Check file sizes match between local and VM
 4. Compare checksums: `md5sum icloud_uploader.py` on both machines
 
+

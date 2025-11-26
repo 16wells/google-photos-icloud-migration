@@ -21,3 +21,4 @@ echo "You can now try running the migration script again:"
 echo "  python3 main.py --config config.yaml"
 echo ""
 
+
