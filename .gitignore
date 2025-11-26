@@ -49,6 +49,10 @@ processed/
 *.swo
 *~
 
+# Cursor - Note: .cursor/environment.json may need to be committed for Cloud Agents
+# Uncomment the line below if you want to ignore the entire .cursor directory
+# .cursor/
+
 # OS
 .DS_Store
 Thumbs.db

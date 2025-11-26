@@ -41,8 +41,15 @@ class GoogleAuthSetup:
         print("=" * 60)
         print()
         
+        # Check if running in non-interactive environment
+        import sys
+        is_interactive = sys.stdin.isatty()
+        
         if self.check_credentials_exist():
             print(f"✓ Found existing credentials file: {self.credentials_file}")
+            if not is_interactive:
+                print("Non-interactive mode: Using existing credentials")
+                return True
             response = input("Use existing credentials? (Y/n): ").strip().lower()
             if response != 'n':
                 return True
@@ -60,6 +67,19 @@ class GoogleAuthSetup:
         print("   - Uses a shared OAuth client (less secure but faster)")
         print("   - Only recommended for testing")
         print()
+        
+        # Check if running in non-interactive environment
+        import sys
+        is_interactive = sys.stdin.isatty()
+        if not is_interactive:
+            print("Non-interactive mode detected. Cannot proceed with interactive setup.")
+            print("Please run this script in an interactive terminal, or set up credentials manually.")
+            print("\nTo set up credentials manually:")
+            print("1. Go to https://console.cloud.google.com/")
+            print("2. Create a project and enable Google Drive API")
+            print("3. Create OAuth 2.0 credentials (Desktop app)")
+            print("4. Download credentials.json and place it in this directory")
+            return False
         
         choice = input("Choose option (1 or 2, or 'q' to quit): ").strip()
         
