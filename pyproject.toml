@@ -1,3 +1,52 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "google-photos-icloud-migration"
+version = "1.0.0"
+description = "A tool to migrate photos and videos from Google Photos to iCloud Photos"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "Skip Shean", email = "skip@16wells.com"}
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Operating System :: MacOS",
+]
+dependencies = [
+    "google-api-python-client>=2.100.0",
+    "google-auth-httplib2>=0.1.1",
+    "google-auth-oauthlib>=1.1.0",
+    "pyicloud>=1.0.0",
+    "Pillow>=10.0.0",
+    "pyyaml>=6.0",
+    "tqdm>=4.66.0",
+    "python-dateutil>=2.8.2",
+    "pyobjc-framework-Photos>=10.0",
+    "python-dotenv>=1.0.0",
+    "jsonschema>=4.17.0",
+    "rich>=13.0.0",
+]
+
+[project.scripts]
+photo-migrate = "google_photos_icloud_migration.cli.main:main"
+
+[tool.setuptools]
+packages = ["google_photos_icloud_migration"]
+
+[tool.setuptools.package-data]
+google_photos_icloud_migration = ["py.typed"]
+
 [tool.black]
 line-length = 100
 target-version = ['py38', 'py39', 'py310', 'py311']
