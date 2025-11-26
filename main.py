@@ -5,6 +5,7 @@ import argparse
 import json
 import logging
 import sys
+import zipfile
 from pathlib import Path
 from typing import Dict, List, Optional
 import yaml
@@ -66,6 +67,9 @@ class MigrationOrchestrator:
         # Failed uploads tracking
         self.failed_uploads_file = self.base_dir / 'failed_uploads.json'
         
+        # Corrupted zip files tracking
+        self.corrupted_zips_file = self.base_dir / 'corrupted_zips.json'
+        
         # Verification failure handling
         self.ignore_all_verification_failures = False
         
@@ -75,7 +79,26 @@ class MigrationOrchestrator:
     def _load_config(self, config_path: str) -> Dict:
         """Load configuration from YAML file."""
         with open(config_path, 'r') as f:
-            return yaml.safe_load(f)
+            config = yaml.safe_load(f)
+        
+        # Ensure processing section exists with defaults
+        if 'processing' not in config:
+            config['processing'] = {}
+        
+        processing_defaults = {
+            'base_dir': '/tmp/google-photos-migration',
+            'zip_dir': 'zips',
+            'extracted_dir': 'extracted',
+            'processed_dir': 'processed',
+            'batch_size': 100,
+            'cleanup_after_upload': True
+        }
+        
+        for key, default_value in processing_defaults.items():
+            if key not in config['processing']:
+                config['processing'][key] = default_value
+        
+        return config
     
     def _setup_logging(self):
         """Set up logging configuration."""
@@ -472,6 +495,50 @@ class MigrationOrchestrator:
         except IOError as e:
             logger.error(f"Could not save failed uploads file: {e}")
     
+    def _save_corrupted_zip(self, file_info: dict, zip_path: Path, error_message: str):
+        """
+        Save corrupted zip file info for later re-download.
+        
+        Args:
+            file_info: Google Drive file metadata dictionary with 'id', 'name', 'size'
+            zip_path: Local path to the corrupted zip file
+            error_message: Error message describing the corruption
+        """
+        # Load existing corrupted zips
+        existing_corrupted = {}
+        if self.corrupted_zips_file.exists():
+            try:
+                with open(self.corrupted_zips_file, 'r') as f:
+                    existing_corrupted = json.load(f)
+            except (json.JSONDecodeError, IOError) as e:
+                logger.warning(f"Could not read existing corrupted zips file: {e}")
+                existing_corrupted = {}
+        
+        # Add this corrupted zip
+        file_id = file_info.get('id', '')
+        file_name = file_info.get('name', zip_path.name)
+        file_size = file_info.get('size', '0')
+        
+        existing_corrupted[file_id] = {
+            'file_id': file_id,
+            'file_name': file_name,
+            'file_size': file_size,
+            'local_path': str(zip_path),
+            'error': error_message,
+            'detected_at': str(Path(zip_path).stat().st_mtime) if zip_path.exists() else None,
+            'local_size_mb': zip_path.stat().st_size / (1024 * 1024) if zip_path.exists() else None
+        }
+        
+        # Save updated corrupted zips
+        try:
+            with open(self.corrupted_zips_file, 'w') as f:
+                json.dump(existing_corrupted, f, indent=2)
+            logger.warning(f"⚠️  Corrupted zip file saved to: {self.corrupted_zips_file}")
+            logger.warning(f"   File: {file_name}")
+            logger.warning(f"   You can re-download it later from Google Drive")
+        except IOError as e:
+            logger.error(f"Could not save corrupted zips file: {e}")
+    
     def retry_failed_uploads(self, use_sync_method: bool = False) -> Dict[Path, bool]:
         """
         Retry uploading files that previously failed.
@@ -605,7 +672,7 @@ class MigrationOrchestrator:
                 shutil.rmtree(extracted_dir)
     
     def process_single_zip(self, zip_path: Path, zip_number: int, total_zips: int, 
-                           use_sync_method: bool = False) -> bool:
+                           use_sync_method: bool = False, file_info: Optional[dict] = None) -> bool:
         """
         Process a single zip file: extract, process metadata, upload, cleanup.
         
@@ -614,6 +681,7 @@ class MigrationOrchestrator:
             zip_number: Current zip number (for logging)
             total_zips: Total number of zip files
             use_sync_method: Whether to use Photos library sync method
+            file_info: Optional Google Drive file metadata (for tracking corrupted files)
         
         Returns:
             True if successful, False otherwise
@@ -624,7 +692,29 @@ class MigrationOrchestrator:
             logger.info("=" * 60)
             
             # Extract this zip file
-            extracted_dir = self.extractor.extract_zip(zip_path)
+            try:
+                extracted_dir = self.extractor.extract_zip(zip_path)
+            except (zipfile.BadZipFile, RuntimeError) as e:
+                # Handle corrupted zip file (BadZipFile from extractor, RuntimeError from validation)
+                error_msg = str(e)
+                logger.error(f"❌ Corrupted zip file detected: {zip_path.name}")
+                logger.error(f"   Error: {error_msg}")
+                
+                # Save to corrupted zips file if we have file_info
+                if file_info:
+                    self._save_corrupted_zip(file_info, zip_path, error_msg)
+                else:
+                    # Try to create minimal file_info from zip_path
+                    minimal_info = {
+                        'id': 'unknown',
+                        'name': zip_path.name,
+                        'size': str(zip_path.stat().st_size) if zip_path.exists() else '0'
+                    }
+                    self._save_corrupted_zip(minimal_info, zip_path, error_msg)
+                
+                logger.warning(f"⚠️  Skipping corrupted zip file: {zip_path.name}")
+                logger.warning(f"   This file has been saved to corrupted_zips.json for later re-download")
+                return False
             
             # Process metadata for this zip
             media_json_pairs = self.extractor.identify_media_json_pairs(extracted_dir)
@@ -834,6 +924,9 @@ class MigrationOrchestrator:
             # Setup iCloud uploader once (before processing zips)
             self.setup_icloud_uploader(use_sync_method=use_sync_method)
             
+            # Create mapping from file name to file_info for looking up existing zips
+            file_info_by_name = {file_info['name']: file_info for file_info in zip_file_list}
+            
             successful = 0
             failed = 0
             total_zips = len(zip_file_list)
@@ -847,8 +940,11 @@ class MigrationOrchestrator:
                     logger.info(f"Processing existing zip {processed_count}/{total_zips}: {existing_zip.name}")
                     logger.info("=" * 60)
                     
+                    # Look up file_info for this existing zip
+                    file_info = file_info_by_name.get(existing_zip.name)
+                    
                     # Process this zip file
-                    if self.process_single_zip(existing_zip, processed_count, total_zips, use_sync_method):
+                    if self.process_single_zip(existing_zip, processed_count, total_zips, use_sync_method, file_info=file_info):
                         successful += 1
                         
                         # Cleanup zip file after successful processing to free up space
@@ -891,8 +987,8 @@ class MigrationOrchestrator:
                     
                     zip_file = self.downloader.download_single_zip(file_info, zip_dir)
                     
-                    # Process this zip file
-                    if self.process_single_zip(zip_file, processed_count, total_zips, use_sync_method):
+                    # Process this zip file (file_info is already available)
+                    if self.process_single_zip(zip_file, processed_count, total_zips, use_sync_method, file_info=file_info):
                         successful += 1
                         
                         # Cleanup zip file after successful processing to free up space
@@ -929,14 +1025,46 @@ class MigrationOrchestrator:
                     logger.info(f"Removing processed files: {processed_dir}")
                     shutil.rmtree(processed_dir)
             
-            # Check for failed uploads
+            # Check for failed uploads and corrupted zips
             failed_uploads_exist = self.failed_uploads_file.exists() and self.failed_uploads_file.stat().st_size > 0
+            corrupted_zips_exist = self.corrupted_zips_file.exists() and self.corrupted_zips_file.stat().st_size > 0
             
             logger.info("=" * 60)
             logger.info(f"Migration completed!")
             logger.info(f"  Successful: {successful}/{len(zip_file_list)} zip files")
             if failed > 0:
                 logger.info(f"  Failed: {failed}/{len(zip_file_list)} zip files")
+            
+            if corrupted_zips_exist:
+                logger.info("")
+                logger.warning("=" * 60)
+                logger.warning("⚠️  CORRUPTED ZIP FILES DETECTED")
+                logger.warning("=" * 60)
+                try:
+                    with open(self.corrupted_zips_file, 'r') as f:
+                        corrupted_data = json.load(f)
+                    corrupted_count = len(corrupted_data)
+                    logger.warning(f"Found {corrupted_count} corrupted zip file(s)")
+                    logger.warning(f"Corrupted zip files saved to: {self.corrupted_zips_file}")
+                    logger.warning("")
+                    logger.warning("These files need to be re-downloaded from Google Drive:")
+                    for file_id, file_data in corrupted_data.items():
+                        logger.warning(f"  - {file_data.get('file_name', 'unknown')}")
+                        if file_data.get('local_size_mb'):
+                            logger.warning(f"    Local size: {file_data['local_size_mb']:.1f} MB")
+                        if file_data.get('file_size'):
+                            try:
+                                expected_size_mb = int(file_data['file_size']) / (1024 * 1024)
+                                logger.warning(f"    Expected size: {expected_size_mb:.1f} MB")
+                            except (ValueError, TypeError):
+                                pass
+                    logger.warning("")
+                    logger.warning("You can manually re-download these files from Google Drive")
+                    logger.warning("or delete the corrupted local files and re-run the script")
+                    logger.warning("=" * 60)
+                except (json.JSONDecodeError, IOError) as e:
+                    logger.warning(f"Could not read corrupted zips file: {e}")
+            
             if failed_uploads_exist:
                 logger.info("")
                 logger.warning("⚠️  Some files failed to upload to iCloud")

@@ -45,6 +45,22 @@ class Extractor:
         
         extract_to.mkdir(parents=True, exist_ok=True)
         
+        # Validate zip file before extraction
+        try:
+            with zipfile.ZipFile(zip_path, 'r') as test_zip:
+                test_zip.testzip()
+        except zipfile.BadZipFile:
+            raise zipfile.BadZipFile(
+                f"File '{zip_path.name}' is not a valid zip file. "
+                f"It may be corrupted or incomplete. File size: {zip_path.stat().st_size / (1024*1024):.1f} MB. "
+                f"Consider re-downloading this file from Google Drive."
+            )
+        except Exception as e:
+            raise RuntimeError(
+                f"Error validating zip file '{zip_path.name}': {e}. "
+                f"File may be corrupted or incomplete."
+            )
+        
         logger.info(f"Extracting {zip_path.name} to {extract_to}")
         
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:

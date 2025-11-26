@@ -1699,12 +1699,21 @@ class iCloudPhotosSyncUploader:
         
         # Import PhotoKit framework
         try:
-            from Photos import PHPhotoLibrary, PHAssetChangeRequest, PHAuthorizationStatus
+            from Photos import (
+                PHPhotoLibrary, PHAssetChangeRequest, PHAuthorizationStatus,
+                PHAuthorizationStatusAuthorized, PHAuthorizationStatusDenied,
+                PHAuthorizationStatusLimited, PHAuthorizationStatusNotDetermined,
+                PHAuthorizationStatusRestricted
+            )
             from Photos import PHAssetCollection, PHAssetCollectionChangeRequest, PHFetchOptions
             from Foundation import NSURL
             self.PHPhotoLibrary = PHPhotoLibrary
             self.PHAssetChangeRequest = PHAssetChangeRequest
-            self.PHAuthorizationStatus = PHAuthorizationStatus
+            self.PHAuthorizationStatusAuthorized = PHAuthorizationStatusAuthorized
+            self.PHAuthorizationStatusDenied = PHAuthorizationStatusDenied
+            self.PHAuthorizationStatusLimited = PHAuthorizationStatusLimited
+            self.PHAuthorizationStatusNotDetermined = PHAuthorizationStatusNotDetermined
+            self.PHAuthorizationStatusRestricted = PHAuthorizationStatusRestricted
             self.PHAssetCollection = PHAssetCollection
             self.PHAssetCollectionChangeRequest = PHAssetCollectionChangeRequest
             self.PHFetchOptions = PHFetchOptions
@@ -1716,7 +1725,7 @@ class iCloudPhotosSyncUploader:
             ) from e
         
         # Cache for album collections
-        self._album_cache: Optional[Dict[str, PHAssetCollection]] = None
+        self._album_cache: Optional[Dict[str, any]] = None
         self._album_cache_timestamp: Optional[float] = None
         
         # Request permission on initialization
@@ -1736,17 +1745,17 @@ class iCloudPhotosSyncUploader:
             # Check current authorization status
             current_status = self.PHPhotoLibrary.authorizationStatus()
             
-            if current_status == self.PHAuthorizationStatus.Authorized:
+            if current_status == self.PHAuthorizationStatusAuthorized:
                 logger.debug("Photo library write permission already granted")
                 return True
-            elif current_status == self.PHAuthorizationStatus.Limited:
+            elif current_status == self.PHAuthorizationStatusLimited:
                 logger.info("Photo library has limited access - proceeding")
                 return True
-            elif current_status == self.PHAuthorizationStatus.Denied:
+            elif current_status == self.PHAuthorizationStatusDenied:
                 logger.error("Photo library write permission denied")
                 logger.error("Please grant permission in System Settings > Privacy & Security > Photos")
                 return False
-            elif current_status == self.PHAuthorizationStatus.NotDetermined:
+            elif current_status == self.PHAuthorizationStatusNotDetermined:
                 # Request permission
                 logger.info("Requesting photo library write permission...")
                 logger.info("You may be prompted to grant permission in System Settings")
@@ -1781,7 +1790,7 @@ class iCloudPhotosSyncUploader:
                     return False
                 
                 status = auth_status[0]
-                if status == self.PHAuthorizationStatus.Authorized or status == self.PHAuthorizationStatus.Limited:
+                if status == self.PHAuthorizationStatusAuthorized or status == self.PHAuthorizationStatusLimited:
                     logger.info("✓ Photo library write permission granted")
                     return True
                 else:
@@ -1797,7 +1806,7 @@ class iCloudPhotosSyncUploader:
             logger.debug(traceback.format_exc())
             return False
     
-    def _get_or_create_album(self, album_name: str) -> Optional[PHAssetCollection]:
+    def _get_or_create_album(self, album_name: str) -> Optional[any]:
         """
         Get existing album or create a new one using PhotoKit.
         
@@ -1931,7 +1940,7 @@ class iCloudPhotosSyncUploader:
             
             # Check permission
             auth_status = self.PHPhotoLibrary.authorizationStatus()
-            if auth_status not in (self.PHAuthorizationStatus.Authorized, self.PHAuthorizationStatus.Limited):
+            if auth_status not in (self.PHAuthorizationStatusAuthorized, self.PHAuthorizationStatusLimited):
                 logger.error("Photo library write permission not granted")
                 return False
             

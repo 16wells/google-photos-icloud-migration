@@ -51,9 +51,9 @@ class DriveDownloader:
                 flow = InstalledAppFlow.from_client_secrets_file(
                     self.credentials_file, SCOPES)
                 
-                # Check if we're in a headless environment (no DISPLAY)
+                # Check if we're in a headless environment
                 # Use manual authorization for headless environments
-                if os.environ.get('DISPLAY') is None or not self._can_open_browser():
+                if self._is_headless_environment():
                     logger.info("=" * 60)
                     logger.info("Running in headless mode - Manual authorization required")
                     logger.info("=" * 60)
@@ -97,12 +97,38 @@ class DriveDownloader:
     
     def _can_open_browser(self):
         """Check if we can open a browser."""
+        import sys
         try:
             import webbrowser
+            # On macOS, browsers work without DISPLAY variable
+            if sys.platform == 'darwin':
+                return True
             browser = webbrowser.get()
             return browser is not None
         except:
             return False
+    
+    def _is_headless_environment(self):
+        """Check if we're running in a headless environment."""
+        import sys
+        
+        # macOS always has a display (unless SSH without forwarding)
+        if sys.platform == 'darwin':
+            # Check if we're in an SSH session without display
+            if os.environ.get('SSH_CLIENT') and not os.environ.get('DISPLAY'):
+                return True
+            return False
+        
+        # Linux: check DISPLAY variable
+        if sys.platform.startswith('linux'):
+            return os.environ.get('DISPLAY') is None
+        
+        # Windows typically has display
+        if sys.platform == 'win32':
+            return False
+        
+        # Default: try browser check
+        return not self._can_open_browser()
     
     def list_zip_files(self, folder_id: Optional[str] = None, 
                        pattern: Optional[str] = None) -> List[dict]:
