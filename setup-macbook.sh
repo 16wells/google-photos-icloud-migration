@@ -40,6 +40,39 @@ if ! command -v brew &> /dev/null; then
     echo "⚠️  Homebrew not found. Installing Homebrew..."
     echo "   (This will prompt for your password)"
     /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    
+    # Add Homebrew to PATH (location differs on Intel vs Apple Silicon)
+    if [ -f "/opt/homebrew/bin/brew" ]; then
+        # Apple Silicon Mac
+        eval "$(/opt/homebrew/bin/brew shellenv)"
+        echo "✓ Added Homebrew to PATH (Apple Silicon)"
+    elif [ -f "/usr/local/bin/brew" ]; then
+        # Intel Mac
+        eval "$(/usr/local/bin/brew shellenv)"
+        echo "✓ Added Homebrew to PATH (Intel)"
+    else
+        # Try to find brew in common locations
+        BREW_PATH=$(find /opt /usr/local -name brew -type f 2>/dev/null | head -1)
+        if [ -n "$BREW_PATH" ]; then
+            eval "$($BREW_PATH shellenv)"
+            echo "✓ Added Homebrew to PATH (found at $BREW_PATH)"
+        else
+            echo "⚠️  Could not find Homebrew after installation."
+            echo "   Please run this command and then re-run this script:"
+            echo "   eval \"\$(/opt/homebrew/bin/brew shellenv)\"  # Apple Silicon"
+            echo "   eval \"\$(/usr/local/bin/brew shellenv)\"     # Intel"
+            exit 1
+        fi
+    fi
+    
+    # Verify brew is now available
+    if ! command -v brew &> /dev/null; then
+        echo "✗ ERROR: Homebrew installed but not in PATH"
+        echo "   Please restart your terminal or run:"
+        echo "   eval \"\$(/opt/homebrew/bin/brew shellenv)\"  # Apple Silicon"
+        echo "   eval \"\$(/usr/local/bin/brew shellenv)\"     # Intel"
+        exit 1
+    fi
 else
     echo "✓ Homebrew already installed"
 fi
