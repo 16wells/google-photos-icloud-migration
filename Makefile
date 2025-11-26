@@ -15,19 +15,35 @@ install-dev:  ## Install development dependencies
 test:  ## Run tests
 	pytest tests/ -v || echo "No tests found - run 'make setup-tests' first"
 
+test-cov:  ## Run tests with coverage report
+	pytest tests/ -v --cov=. --cov-report=html --cov-report=term || echo "No tests found - run 'make setup-tests' first"
+
+test-fast:  ## Run tests excluding slow markers
+	pytest tests/ -v -m "not slow" || echo "No tests found - run 'make setup-tests' first"
+
 setup-tests:  ## Create test directory structure
 	mkdir -p tests/fixtures
 	touch tests/__init__.py
 
-format:  ## Format code with black
-	black *.py || echo "black not installed - run 'make install-dev'"
-	isort *.py || echo "isort not installed - run 'make install-dev'"
+format:  ## Format code with black and isort
+	black . || echo "black not installed - run 'make install-dev'"
+	isort . || echo "isort not installed - run 'make install-dev'"
 
-lint:  ## Run linters
-	flake8 *.py || echo "flake8 not installed - run 'make install-dev'"
+format-check:  ## Check code formatting without making changes
+	black --check . || echo "black not installed - run 'make install-dev'"
+	isort --check-only . || echo "isort not installed - run 'make install-dev'"
+
+lint:  ## Run linters (flake8 and ruff)
+	flake8 . || echo "flake8 not installed - run 'make install-dev'"
+	ruff check . || echo "ruff not installed - run 'make install-dev'"
+
+lint-fix:  ## Auto-fix linting issues with ruff
+	ruff check --fix . || echo "ruff not installed - run 'make install-dev'"
 
 type-check:  ## Run type checker
-	mypy *.py || echo "mypy not installed - run 'make install-dev'"
+	mypy . || echo "mypy not installed - run 'make install-dev'"
+
+check-all: format-check lint type-check  ## Run all checks (format, lint, type-check)
 
 run:  ## Run migration with default config
 	python main.py --config config.yaml
@@ -42,6 +58,17 @@ clean:  ## Clean up temporary files and caches
 	find . -type d -name "*.egg-info" -exec rm -r {} + 2>/dev/null || true
 	rm -rf .pytest_cache
 	rm -rf .mypy_cache
+	rm -rf .ruff_cache
+	rm -rf htmlcov
+	rm -rf .coverage
+	rm -rf dist
+	rm -rf build
+
+pre-commit-install:  ## Install pre-commit hooks
+	pre-commit install || echo "pre-commit not installed - run 'make install-dev'"
+
+pre-commit-run:  ## Run pre-commit hooks on all files
+	pre-commit run --all-files || echo "pre-commit not installed - run 'make install-dev'"
 
 setup: install-dev  ## Full setup (install dev deps and create directories)
 	mkdir -p tests/fixtures

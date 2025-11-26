@@ -1,0 +1,35 @@
+[flake8]
+# Maximum line length
+max-line-length = 100
+
+# Error codes to ignore
+# E203: whitespace before ':' (conflicts with black)
+# W503: line break before binary operator (conflicts with black)
+# E501: line too long (handled by max-line-length)
+ignore = E203, W503, E501
+
+# Exclude patterns
+exclude =
+    .git,
+    __pycache__,
+    .venv,
+    venv,
+    env,
+    .eggs,
+    *.egg,
+    build,
+    dist,
+    .mypy_cache,
+    .pytest_cache,
+    .ruff_cache,
+    htmlcov,
+    migrations
+
+# Maximum complexity
+max-complexity = 10
+
+# Per-file ignores
+per-file-ignores =
+    __init__.py:F401  # Allow unused imports in __init__.py
+    tests/*:D  # Allow missing docstrings in tests
+

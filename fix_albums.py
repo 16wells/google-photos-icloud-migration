@@ -8,6 +8,7 @@ import argparse
 import json
 import logging
 import sys
+import zipfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
@@ -17,6 +18,7 @@ from extractor import Extractor
 from metadata_merger import MetadataMerger
 from album_parser import AlbumParser
 from icloud_uploader import iCloudPhotosSyncUploader
+from drive_downloader import DriveDownloader
 
 logger = logging.getLogger(__name__)
 
@@ -193,7 +195,8 @@ def add_photo_to_album(asset, album_collection, uploader: iCloudPhotosSyncUpload
         return False
 
 
-def fix_albums_for_zip(zip_path: Path, config_path: str, wrong_album_name: str = "takeout"):
+def fix_albums_for_zip(zip_path: Path, config_path: str, wrong_album_name: str = "takeout", 
+                       auto_download: bool = False, skip_extraction: bool = False):
     """
     Fix album assignments for photos from a specific zip file.
     
@@ -201,6 +204,8 @@ def fix_albums_for_zip(zip_path: Path, config_path: str, wrong_album_name: str =
         zip_path: Path to the zip file to re-process
         config_path: Path to config.yaml
         wrong_album_name: Name of the album where photos were incorrectly placed
+        auto_download: If True, automatically download missing parts without prompting
+        skip_extraction: If True, skip extraction and work only with already-uploaded photos
     """
     # Load config
     with open(config_path, 'r') as f:
@@ -209,6 +214,7 @@ def fix_albums_for_zip(zip_path: Path, config_path: str, wrong_album_name: str =
     # Setup components
     base_dir = Path(config['processing']['base_dir'])
     base_dir.mkdir(parents=True, exist_ok=True)
+    zip_dir = base_dir / config['processing'].get('zip_dir', 'zips')
     
     extractor = Extractor(base_dir)
     metadata_config = config['metadata']
@@ -225,9 +231,171 @@ def fix_albums_for_zip(zip_path: Path, config_path: str, wrong_album_name: str =
     logger.info(f"Re-processing zip file: {zip_path.name}")
     logger.info(f"Looking for photos in album: '{wrong_album_name}'")
     
-    # Extract zip
-    logger.info("Extracting zip file...")
-    extracted_dir = extractor.extract_zip(zip_path)
+    # Determine zip base name and directory
+    zip_base = zip_path.stem.rsplit('-', 1)[0]  # Remove the part number (e.g., -049)
+    
+    # Check if we can use already-extracted files
+    processed_dir = base_dir / config['processing'].get('processed_dir', 'processed')
+    extracted_dir_base = extractor.extracted_dir / zip_base
+    
+    # Check if we have processed files but need to re-extract for JSON metadata
+    processed_files_exist = processed_dir.exists() and any(processed_dir.iterdir())
+    extracted_dir_exists = extracted_dir_base.exists() and any(extracted_dir_base.rglob('*.json'))
+    
+    if skip_extraction:
+        logger.info("Skipping extraction - will work only with photos already in iCloud Photos")
+        logger.warning("⚠️  Without extraction, album information will be limited.")
+        logger.warning("⚠️  Photos will be matched by filename/date only.")
+        # Find photos in the wrong album first
+        wrong_album_photos = find_photos_in_album(wrong_album_name, uploader)
+        if not wrong_album_photos:
+            logger.warning(f"No photos found in album '{wrong_album_name}'.")
+            return
+        
+        logger.info(f"Found {len(wrong_album_photos)} photos in '{wrong_album_name}' album")
+        logger.warning("⚠️  Cannot determine correct albums without extracted files.")
+        logger.warning("⚠️  Please re-run without --skip-extraction to fix album assignments.")
+        return
+    
+    if extracted_dir_exists:
+        logger.info(f"Found existing extracted files at {extracted_dir_base}, using them...")
+        extracted_dir = extracted_dir_base
+    else:
+        # Extract zip
+        logger.info("Extracting zip file...")
+        # Check if this is a multi-part archive
+        # Find all parts of this archive
+        import re
+        part_pattern = re.compile(re.escape(zip_base) + r'-(\d+)\.zip$')
+        all_parts = sorted([f for f in zip_dir.glob(f"{zip_base}-*.zip") 
+                       if part_pattern.match(f.name)],
+                      key=lambda x: int(part_pattern.match(x.name).group(1)))
+        
+        # Check if we need to download more parts
+        if len(all_parts) > 1:
+            logger.warning(f"⚠️  This zip file is part of a multi-part archive.")
+            logger.warning(f"⚠️  Found {len(all_parts)} parts locally, but need ALL parts to extract.")
+            
+            # Check if we only have the specific part requested
+            requested_part_num = int(zip_path.stem.rsplit('-', 1)[1])  # e.g., 049 from -049
+            has_requested_part = any(int(part_pattern.match(p.name).group(1)) == requested_part_num for p in all_parts)
+            
+            if not has_requested_part:
+                logger.error(f"⚠️  The requested part ({requested_part_num:03d}) is not in the local parts.")
+                logger.error(f"⚠️  Cannot proceed without the specific part you requested.")
+                raise RuntimeError(f"Requested zip part {requested_part_num:03d} not found locally")
+            
+            # List all parts available in Google Drive
+            downloader = DriveDownloader(config['google_drive']['credentials_file'])
+            drive_files = downloader.list_zip_files(
+                folder_id=config['google_drive'].get('folder_id'),
+                pattern=f"{zip_base}-*.zip"
+            )
+            
+            # Get part numbers from drive
+            drive_part_numbers = set()
+            for f in drive_files:
+                match = part_pattern.match(Path(f['name']).name)
+                if match:
+                    drive_part_numbers.add(int(match.group(1)))
+            
+            # Get part numbers we have locally
+            local_part_numbers = {int(part_pattern.match(p.name).group(1)) for p in all_parts}
+            
+            # Find missing parts
+            missing_parts = sorted(drive_part_numbers - local_part_numbers)
+            
+            if missing_parts:
+                logger.warning(f"⚠️  To extract this archive, you need ALL {len(drive_part_numbers)} parts.")
+                logger.warning(f"⚠️  You currently have {len(local_part_numbers)} parts locally.")
+                logger.warning(f"⚠️  Missing {len(missing_parts)} parts.")
+                logger.warning(f"⚠️  Downloading all parts would require ~{len(missing_parts) * 10}GB.")
+                logger.warning(f"")
+                logger.warning(f"⚠️  ALTERNATIVE: Since photos are already uploaded, you could:")
+                logger.warning(f"⚠️  1. Manually organize photos in the Photos app")
+                logger.warning(f"⚠️  2. Or wait until you have all parts from a future migration")
+                logger.warning(f"")
+                
+                if not auto_download:
+                    response = input(f"Do you want to download {len(missing_parts)} missing parts? (yes/no/always): ").strip().lower()
+                    if response in ('always', 'a', 'yes always', 'y always'):
+                        logger.info("✓ Auto-download enabled for this session")
+                        auto_download = True
+                    elif response not in ('yes', 'y'):
+                        logger.error("Aborted. Cannot extract multi-part archive without all parts.")
+                        raise RuntimeError("Missing archive parts. Cannot extract without all parts.")
+                else:
+                    logger.info("Auto-download enabled, proceeding with download...")
+                
+                logger.info(f"Downloading {len(missing_parts)} missing parts...")
+                logger.warning(f"⚠️  Found {len(missing_parts)} missing parts: {missing_parts[:10]}{'...' if len(missing_parts) > 10 else ''}")
+                logger.warning(f"⚠️  This archive requires ALL {len(drive_part_numbers)} parts to extract.")
+                logger.warning(f"⚠️  Downloading {len(missing_parts)} parts (~{len(missing_parts) * 10}GB) will be required.")
+                logger.warning(f"⚠️  This may take a long time and use significant disk space.")
+                
+                if not auto_download:
+                    response = input(f"\nDo you want to download {len(missing_parts)} missing parts? (yes/no/always): ").strip().lower()
+                    if response in ('always', 'a', 'yes always', 'y always'):
+                        logger.info("✓ Auto-download enabled for this session")
+                        auto_download = True
+                    elif response not in ('yes', 'y'):
+                        logger.error("Aborted. Cannot proceed without all archive parts.")
+                        raise RuntimeError("Missing archive parts. Cannot extract without all parts.")
+                else:
+                    logger.info("Auto-download enabled, proceeding with download...")
+                
+                logger.info(f"Downloading {len(missing_parts)} missing parts...")
+                
+                # Download missing parts
+                zip_dir.mkdir(parents=True, exist_ok=True)
+                for part_num in missing_parts:
+                    part_name = f"{zip_base}-{part_num:03d}.zip"
+                    logger.info(f"Downloading {part_name}...")
+                    downloaded = downloader.download_all_zips(
+                        destination_dir=zip_dir,
+                        folder_id=config['google_drive'].get('folder_id'),
+                        pattern=part_name
+                    )
+                    if downloaded:
+                        logger.info(f"✓ Downloaded {part_name}")
+                    else:
+                        logger.warning(f"✗ Failed to download {part_name}")
+                
+                # Re-scan for all parts
+                all_parts = sorted([f for f in zip_dir.glob(f"{zip_base}-*.zip") 
+                                   if part_pattern.match(f.name)],
+                                  key=lambda x: int(part_pattern.match(x.name).group(1)))
+                logger.info(f"Now have {len(all_parts)} parts total")
+        
+        if len(all_parts) > 1:
+            logger.info(f"Detected multi-part archive with {len(all_parts)} parts")
+            logger.info(f"Parts: {[p.name for p in all_parts]}")
+            # For multi-part archives, use command-line unzip which handles them better
+            import subprocess
+            extracted_dir = extractor.extracted_dir / zip_base
+            extracted_dir.mkdir(parents=True, exist_ok=True)
+            
+            logger.info(f"Extracting multi-part archive using unzip command...")
+            # Extract from the LAST part - the central directory is in the last part
+            # unzip will automatically use all parts if they're in the same directory
+            last_part = all_parts[-1]
+            logger.info(f"Extracting from last part (contains central directory): {last_part.name}")
+            result = subprocess.run(
+                ['unzip', '-q', str(last_part), '-d', str(extracted_dir)],
+                capture_output=True,
+                text=True
+            )
+            if result.returncode != 0:
+                logger.error(f"Failed to extract multi-part archive: {result.stderr}")
+                raise RuntimeError(f"Failed to extract multi-part archive: {result.stderr}")
+            logger.info(f"✓ Extracted multi-part archive to {extracted_dir}")
+        else:
+            # Single-part archive, use normal extraction
+            try:
+                extracted_dir = extractor.extract_zip(zip_path)
+            except zipfile.BadZipFile as e:
+                logger.error(f"Failed to extract zip file: {e}")
+                raise
     
     # Process metadata
     logger.info("Processing metadata...")
@@ -348,6 +516,16 @@ def main():
         choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
         help='Logging level'
     )
+    parser.add_argument(
+        '--auto-download',
+        action='store_true',
+        help='Automatically download missing archive parts without prompting'
+    )
+    parser.add_argument(
+        '--skip-extraction',
+        action='store_true',
+        help='Skip extraction and work only with already-uploaded photos (limited functionality)'
+    )
     
     args = parser.parse_args()
     
@@ -375,7 +553,7 @@ def main():
             sys.exit(1)
     
     try:
-        fix_albums_for_zip(zip_path, str(config_path), args.wrong_album)
+        fix_albums_for_zip(zip_path, str(config_path), args.wrong_album, args.auto_download, args.skip_extraction)
     except KeyboardInterrupt:
         logger.info("\nInterrupted by user")
         sys.exit(1)
