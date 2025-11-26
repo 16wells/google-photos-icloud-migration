@@ -63,6 +63,8 @@ class ProcessingConfig:
     processed_dir: str = "processed"
     batch_size: int = 100
     cleanup_after_upload: bool = True
+    max_workers: Optional[int] = None  # None = auto-detect (recommended)
+    enable_parallel_processing: bool = True
     
     def __post_init__(self):
         """Validate processing configuration."""

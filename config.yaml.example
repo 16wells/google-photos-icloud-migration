@@ -44,6 +44,10 @@ processing:
   batch_size: 100
   # Clean up extracted files after processing
   cleanup_after_upload: true
+  # Maximum number of parallel workers (null = auto-detect, recommended)
+  max_workers: null
+  # Enable parallel processing for faster operations
+  enable_parallel_processing: true
 
 # Metadata Configuration
 metadata:

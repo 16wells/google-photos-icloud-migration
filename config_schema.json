@@ -88,6 +88,17 @@
           "type": "boolean",
           "default": true,
           "description": "Clean up extracted files after processing"
+        },
+        "max_workers": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "default": null,
+          "description": "Maximum number of parallel workers (null = auto-detect CPU count)"
+        },
+        "enable_parallel_processing": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable parallel processing for faster operations"
         }
       },
       "additionalProperties": false
