@@ -17,11 +17,21 @@ Thank you for your interest in contributing! This document provides guidelines a
    
    # Install development dependencies
    pip install -r requirements-dev.txt
+   
+   # Or install in development mode (recommended)
+   pip install -e .
+   pip install -r requirements-dev.txt
    ```
 
 3. **Set up pre-commit hooks** (optional but recommended):
    ```bash
    pre-commit install
+   ```
+
+4. **Verify setup**:
+   ```bash
+   make help  # See all available commands
+   make test  # Run tests
    ```
 
 ## Code Style
