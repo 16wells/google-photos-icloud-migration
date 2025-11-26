@@ -1,0 +1,41 @@
+HOW TO UPDATE icloud_uploader.py ON VM
+======================================
+
+Method: Copy chunks and reassemble
+
+STEP 1: Copy reassemble.sh to VM
+---------------------------------
+In Browser SSH, run:
+  cat > reassemble.sh << 'REASSEMBLEEOF'
+[Then paste the contents of reassemble.sh from this directory]
+[Type REASSEMBLEEOF and press Enter]
+  chmod +x reassemble.sh
+
+STEP 2: Copy each chunk file
+-----------------------------
+For each chunk_*.txt file in this directory:
+
+In Browser SSH, run:
+  cat > chunk_XX.txt << 'CHUNKEOF'
+[Paste the chunk content]
+[Type CHUNKEOF and press Enter]
+
+Do this for ALL chunks in order:
+  - chunk_aa.txt
+  - chunk_ab.txt
+  - chunk_ac.txt
+  ... (continue until all chunks are copied)
+
+STEP 3: Reassemble the file
+-----------------------------
+Run:
+  ./reassemble.sh
+
+This will create icloud_uploader.py with all the fixes.
+
+STEP 4: Verify
+--------------
+Run:
+  wc -l icloud_uploader.py  # Should show ~454 lines
+  grep -c "No trusted devices found" icloud_uploader.py  # Should show 2
+

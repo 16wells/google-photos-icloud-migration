@@ -1,0 +1,80 @@
+            logger.warning(f"Album creation not supported via API: {album_name}")
+            logger.info("Albums will need to be created manually in iCloud Photos")
+            return False
+        except Exception as e:
+            logger.error(f"Failed to create album {album_name}: {e}")
+            return False
+    
+    def upload_photo(self, photo_path: Path) -> bool:
+        """
+        Upload a single photo to iCloud Photos.
+        
+        Args:
+            photo_path: Path to photo file
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # pyicloud's photo upload functionality may be limited
+            # The Photos API doesn't have a public upload endpoint
+            # This is a placeholder - actual implementation may require
+            # using Photos app sync or alternative methods
+            
+            logger.warning("Direct photo upload via pyicloud may not be supported")
+            logger.info(f"Would upload: {photo_path.name}")
+            
+            # Alternative: Use Photos library sync
+            # Files would need to be copied to Photos library directory
+            # which then syncs to iCloud
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"Failed to upload photo {photo_path.name}: {e}")
+            return False
+    
+    def verify_file_uploaded(self, file_path: Path) -> bool:
+        """
+        Verify that a file was successfully uploaded to iCloud Photos.
+        
+        Note: This is a placeholder as direct API upload may not be supported.
+        For actual verification, you may need to query the iCloud Photos API.
+        
+        Args:
+            file_path: Path to the original file
+        
+        Returns:
+            True if file is verified to be uploaded, False otherwise
+        """
+        try:
+            # Since direct API upload may not be supported, verification is limited
+            # In a real implementation, you would query the iCloud Photos API
+            # to check if the file exists
+            
+            # For now, if upload_photo returned True, we assume it's uploaded
+            # This is a placeholder - actual verification would require API query
+            logger.debug(f"Verification not fully supported for API uploader: {file_path.name}")
+            return False
+            
+        except Exception as e:
+            logger.debug(f"Error verifying file {file_path.name}: {e}")
+            return False
+    
+    def upload_photos_batch(self, photo_paths: List[Path], 
+                           album_name: Optional[str] = None,
+                           verify_after_upload: bool = True,
+                           on_verification_failure: Optional[Callable[[Path], None]] = None) -> Dict[Path, bool]:
+        """
+        Upload multiple photos in a batch.
+        
+        Args:
+            photo_paths: List of photo file paths
+            album_name: Optional album name to add photos to
+            verify_after_upload: If True, verify each file after upload
+            on_verification_failure: Optional callback function(file_path) called when verification fails
+        
+        Returns:
+            Dictionary mapping file paths to success status
+        """
+        results = {}

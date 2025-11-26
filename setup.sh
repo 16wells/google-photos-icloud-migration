@@ -20,10 +20,15 @@ else
     echo "Warning: Unknown package manager. Please install Python 3, pip, unzip, and ExifTool manually."
 fi
 
+# Create virtual environment
+echo "Creating virtual environment..."
+python3 -m venv venv
+source venv/bin/activate
+
 # Install Python dependencies
 echo "Installing Python dependencies..."
-pip3 install --upgrade pip
-pip3 install -r requirements.txt
+pip install --upgrade pip
+pip install -r requirements.txt
 
 # Create necessary directories
 mkdir -p /tmp/google-photos-migration/{zips,extracted,processed}
@@ -33,5 +38,6 @@ echo ""
 echo "Next steps:"
 echo "1. Download Google Drive API credentials and save as 'credentials.json'"
 echo "2. Copy config.yaml.example to config.yaml and update with your settings"
-echo "3. Run: python3 main.py --config config.yaml"
+echo "3. Activate the virtual environment: source venv/bin/activate"
+echo "4. Run: python main.py --config config.yaml"
 

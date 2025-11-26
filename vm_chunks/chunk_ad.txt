@@ -1,0 +1,80 @@
+        
+        for photo_path in tqdm(photo_paths, desc=f"Uploading photos"):
+            success = self.upload_photo(photo_path)
+            
+            # Verify upload if requested
+            if success and verify_after_upload:
+                verified = self.verify_file_uploaded(photo_path)
+                if not verified:
+                    logger.warning(f"Upload verification failed for {photo_path.name}")
+                    if on_verification_failure:
+                        on_verification_failure(photo_path)
+                    success = False
+            
+            results[photo_path] = success
+            
+            # Rate limiting
+            time.sleep(0.5)
+        
+        successful = sum(1 for v in results.values() if v)
+        logger.info(f"Uploaded {successful}/{len(results)} photos")
+        
+        return results
+    
+    def upload_video(self, video_path: Path) -> bool:
+        """
+        Upload a single video to iCloud Photos.
+        
+        Args:
+            video_path: Path to video file
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        # Similar to photo upload - may not be directly supported
+        logger.warning(f"Video upload may not be supported: {video_path.name}")
+        return False
+
+
+class iCloudPhotosSyncUploader:
+    """
+    Alternative uploader using Photos library sync method.
+    
+    This approach copies files to the Photos library directory,
+    which then syncs to iCloud Photos automatically.
+    """
+    
+    def __init__(self, photos_library_path: Optional[Path] = None):
+        """
+        Initialize the sync-based uploader.
+        
+        Args:
+            photos_library_path: Path to Photos library (defaults to macOS default)
+        """
+        if photos_library_path is None:
+            # Default macOS Photos library location
+            home = Path.home()
+            self.photos_library_path = home / "Pictures" / "Photos Library.photoslibrary"
+        else:
+            self.photos_library_path = photos_library_path
+        
+        # Photos library structure
+        self.masters_path = self.photos_library_path / "Masters"
+        
+        logger.info(f"Using Photos library: {self.photos_library_path}")
+    
+    def upload_file(self, file_path: Path, album_name: Optional[str] = None) -> bool:
+        """
+        Copy file to Photos library for sync.
+        
+        Args:
+            file_path: Path to media file
+            album_name: Optional album name (not directly supported)
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Create Masters directory if it doesn't exist
+            self.masters_path.mkdir(parents=True, exist_ok=True)
+            

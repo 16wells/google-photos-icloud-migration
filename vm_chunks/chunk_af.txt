@@ -1,0 +1,54 @@
+            
+            # Check if file exists in Photos library
+            target_dir = self.masters_path / str(year) / f"{month:02d}"
+            target_path = target_dir / file_path.name
+            
+            if target_path.exists():
+                # Also verify file size matches (basic integrity check)
+                if target_path.stat().st_size == file_path.stat().st_size:
+                    return True
+            
+            return False
+            
+        except Exception as e:
+            logger.debug(f"Error verifying file {file_path.name}: {e}")
+            return False
+    
+    def upload_files_batch(self, file_paths: List[Path],
+                          albums: Optional[Dict[Path, str]] = None,
+                          verify_after_upload: bool = True,
+                          on_verification_failure: Optional[Callable[[Path], None]] = None) -> Dict[Path, bool]:
+        """
+        Upload multiple files in a batch.
+        
+        Args:
+            file_paths: List of file paths
+            albums: Optional mapping of files to album names
+            verify_after_upload: If True, verify each file after upload
+            on_verification_failure: Optional callback function(file_path) called when verification fails
+        
+        Returns:
+            Dictionary mapping file paths to success status
+        """
+        results = {}
+        
+        for file_path in tqdm(file_paths, desc="Copying to Photos library"):
+            album_name = albums.get(file_path) if albums else None
+            success = self.upload_file(file_path, album_name)
+            
+            # Verify upload if requested
+            if success and verify_after_upload:
+                verified = self.verify_file_uploaded(file_path)
+                if not verified:
+                    logger.warning(f"Upload verification failed for {file_path.name}")
+                    if on_verification_failure:
+                        on_verification_failure(file_path)
+                    success = False
+            
+            results[file_path] = success
+        
+        successful = sum(1 for v in results.values() if v)
+        logger.info(f"Copied {successful}/{len(results)} files to Photos library")
+        
+        return results
+

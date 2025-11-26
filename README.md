@@ -72,6 +72,20 @@ python main.py --config config.yaml --use-sync
 
 This method copies files to your Photos library, which then syncs to iCloud Photos automatically.
 
+### Retrying Failed Uploads
+
+If some files fail to upload, they are automatically saved to `failed_uploads.json`. To retry only the failed uploads (skipping download/extract/process steps):
+
+```bash
+python main.py --config config.yaml --retry-failed
+```
+
+You can also combine with `--use-sync`:
+
+```bash
+python main.py --config config.yaml --retry-failed --use-sync
+```
+
 ### Running on GCP VM
 
 1. Set up the VM:
@@ -126,9 +140,22 @@ Install ExifTool:
 - Or run interactively and enter code when prompted
 
 ### Upload Failures
-- Try using `--use-sync` flag for Photos library sync method
-- Check iCloud storage space
-- Verify Apple ID credentials
+- Failed uploads are automatically saved to `failed_uploads.json` in the base directory
+- To retry failed uploads, run:
+  ```bash
+  python main.py --config config.yaml --retry-failed
+  ```
+- The retry command will:
+  - Load the list of previously failed files
+  - Attempt to upload them again
+  - Update the failed uploads file (removing successful ones)
+  - Show progress and final results
+- If uploads continue to fail:
+  - Try using `--use-sync` flag for Photos library sync method
+  - Check iCloud storage space
+  - Verify Apple ID credentials
+  - Check network connectivity
+  - Review error messages in the log file
 
 ### Large File Processing
 - Adjust `batch_size` in config.yaml

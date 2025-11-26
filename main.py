@@ -239,18 +239,27 @@ class MigrationOrchestrator:
         icloud_config = self.config['icloud']
         
         if use_sync_method:
-            self.icloud_uploader = iCloudPhotosSyncUploader()
+            # Get photos library path from config if specified
+            photos_library_path = icloud_config.get('photos_library_path')
+            if photos_library_path:
+                photos_library_path = Path(photos_library_path).expanduser()
+            self.icloud_uploader = iCloudPhotosSyncUploader(photos_library_path=photos_library_path)
         else:
-            password = icloud_config.get('password', '').strip()
+            password = icloud_config.get('password', '').strip() if icloud_config.get('password') else ''
             # Prompt for password if empty
             if not password:
                 import getpass
                 logger.info("iCloud password not set in config. Please enter your Apple ID password:")
                 logger.info("(Note: If you have 2FA enabled, use your regular password and you'll be prompted for 2FA code)")
-                password = getpass.getpass("Password: ")
+                password = getpass.getpass("Password: ").strip()
+            
+            # Validate Apple ID is present
+            apple_id = icloud_config.get('apple_id', '').strip()
+            if not apple_id:
+                raise ValueError("Apple ID is required in config file (icloud.apple_id)")
             
             self.icloud_uploader = iCloudUploader(
-                apple_id=icloud_config['apple_id'],
+                apple_id=apple_id,
                 password=password,
                 trusted_device_id=icloud_config.get('trusted_device_id')
             )

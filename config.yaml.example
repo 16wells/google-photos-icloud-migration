@@ -16,6 +16,9 @@ icloud:
   password: ""
   # Trusted device ID (optional, for 2FA)
   trusted_device_id: ""
+  # Photos library path (optional, for --use-sync method on macOS)
+  # If not specified, defaults to ~/Pictures/Photos Library.photoslibrary
+  # photos_library_path: "~/Pictures/Photos Library.photoslibrary"
 
 # Processing Configuration
 processing:

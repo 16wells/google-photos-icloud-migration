@@ -3,6 +3,7 @@ Google Drive API integration for downloading Google Takeout zip files.
 """
 import os
 import json
+import shutil
 from pathlib import Path
 from typing import List, Optional
 from googleapiclient.discovery import build
@@ -115,18 +116,64 @@ class DriveDownloader:
         Returns:
             List of file metadata dictionaries
         """
+        import time
+        from googleapiclient.errors import HttpError
+        
         query = "mimeType='application/zip' or mimeType='application/x-zip-compressed'"
         
         if folder_id:
             query += f" and '{folder_id}' in parents"
         
-        results = self.service.files().list(
-            q=query,
-            fields="files(id, name, size, modifiedTime)",
-            pageSize=1000
-        ).execute()
+        # Retry logic for handling API errors
+        max_retries = 3
+        retry_delay = 2
+        
+        for attempt in range(max_retries):
+            try:
+                results = self.service.files().list(
+                    q=query,
+                    fields="files(id, name, size, modifiedTime)",
+                    pageSize=1000
+                ).execute()
+                break
+            except HttpError as e:
+                if e.resp.status == 500 and attempt < max_retries - 1:
+                    # Internal server error - retry with exponential backoff
+                    wait_time = retry_delay * (2 ** attempt)
+                    logger.warning(f"Google Drive API returned 500 error. Retrying in {wait_time} seconds... (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(wait_time)
+                    continue
+                elif e.resp.status == 500 and folder_id:
+                    # If folder_id query fails, try without folder_id
+                    logger.warning(f"Query with folder_id failed. Trying without folder filter...")
+                    query = "mimeType='application/zip' or mimeType='application/x-zip-compressed'"
+                    try:
+                        results = self.service.files().list(
+                            q=query,
+                            fields="files(id, name, size, modifiedTime)",
+                            pageSize=1000
+                        ).execute()
+                        break
+                    except HttpError as e2:
+                        raise e2
+                else:
+                    raise
         
         all_files = results.get('files', [])
+        
+        # Handle pagination if there are more than 1000 files
+        while 'nextPageToken' in results:
+            try:
+                results = self.service.files().list(
+                    q=query,
+                    fields="files(id, name, size, modifiedTime)",
+                    pageSize=1000,
+                    pageToken=results['nextPageToken']
+                ).execute()
+                all_files.extend(results.get('files', []))
+            except HttpError as e:
+                logger.warning(f"Error fetching next page: {e}. Continuing with files fetched so far.")
+                break
         
         # Filter by pattern if provided (do this in Python for better pattern matching)
         if pattern:
@@ -159,8 +206,36 @@ class DriveDownloader:
         
         return files
     
+    def _check_disk_space(self, path: Path, required_bytes: int, 
+                         buffer_percent: float = 0.1) -> bool:
+        """
+        Check if there's enough disk space available.
+        
+        Args:
+            path: Path to check disk space for
+            required_bytes: Required bytes
+            buffer_percent: Additional buffer percentage (default 10%)
+        
+        Returns:
+            True if enough space, False otherwise
+        """
+        stat = shutil.disk_usage(path)
+        available_bytes = stat.free
+        required_with_buffer = int(required_bytes * (1 + buffer_percent))
+        
+        if available_bytes < required_with_buffer:
+            available_gb = available_bytes / (1024 ** 3)
+            required_gb = required_with_buffer / (1024 ** 3)
+            logger.error(
+                f"Insufficient disk space: {available_gb:.2f} GB available, "
+                f"{required_gb:.2f} GB required (with {buffer_percent*100:.0f}% buffer)"
+            )
+            return False
+        
+        return True
+    
     def download_file(self, file_id: str, file_name: str, 
-                     destination_dir: Path) -> Path:
+                     destination_dir: Path, file_size: Optional[int] = None) -> Path:
         """
         Download a file from Google Drive.
         
@@ -168,6 +243,7 @@ class DriveDownloader:
             file_id: Google Drive file ID
             file_name: Name of the file
             destination_dir: Directory to save the file
+            file_size: Optional file size in bytes (for disk space checking)
         
         Returns:
             Path to downloaded file
@@ -179,6 +255,14 @@ class DriveDownloader:
         if destination_path.exists():
             logger.info(f"File {file_name} already exists, skipping download")
             return destination_path
+        
+        # Check disk space before downloading
+        if file_size:
+            if not self._check_disk_space(destination_dir, file_size):
+                raise OSError(
+                    f"Insufficient disk space to download {file_name} "
+                    f"({file_size / (1024**3):.2f} GB)"
+                )
         
         logger.info(f"Downloading {file_name}...")
         
@@ -213,13 +297,46 @@ class DriveDownloader:
         downloaded_files = []
         
         for file_info in files:
+            file_size = None
+            if 'size' in file_info:
+                try:
+                    file_size = int(file_info['size'])
+                except (ValueError, TypeError):
+                    pass
+            
             file_path = self.download_file(
                 file_info['id'],
                 file_info['name'],
-                destination_dir
+                destination_dir,
+                file_size=file_size
             )
             downloaded_files.append(file_path)
         
         logger.info(f"Downloaded {len(downloaded_files)} zip files")
         return downloaded_files
+    
+    def download_single_zip(self, file_info: dict, destination_dir: Path) -> Path:
+        """
+        Download a single zip file.
+        
+        Args:
+            file_info: File metadata dictionary with 'id', 'name', and optionally 'size'
+            destination_dir: Directory to save zip file
+        
+        Returns:
+            Path to downloaded file
+        """
+        file_size = None
+        if 'size' in file_info:
+            try:
+                file_size = int(file_info['size'])
+            except (ValueError, TypeError):
+                pass
+        
+        return self.download_file(
+            file_info['id'],
+            file_info['name'],
+            destination_dir,
+            file_size=file_size
+        )
 
