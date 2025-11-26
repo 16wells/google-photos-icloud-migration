@@ -253,6 +253,147 @@ class GoogleAuthSetup:
         except Exception as e:
             logger.error(f"Authentication failed: {e}")
             return False
+    
+    def select_google_drive_folder(self) -> Optional[str]:
+        """
+        Interactively select a Google Drive folder containing Takeout zip files.
+        
+        Returns:
+            Folder ID if selected, None if user chooses to skip or search all Drive
+        """
+        try:
+            from googleapiclient.discovery import build
+            from google.oauth2.credentials import Credentials
+            
+            SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
+            
+            # Load credentials
+            if not Path(self.token_file).exists():
+                print("⚠️  Not authenticated yet. Please authenticate first.")
+                return None
+            
+            creds = Credentials.from_authorized_user_file(self.token_file, SCOPES)
+            if not creds or not creds.valid:
+                print("⚠️  Authentication expired. Please re-authenticate.")
+                return None
+            
+            service = build('drive', 'v3', credentials=creds)
+            
+            print("\n" + "=" * 60)
+            print("Google Drive Folder Selection")
+            print("=" * 60)
+            print()
+            print("Where are your Google Takeout zip files located?")
+            print()
+            print("1. Search all of Google Drive (default)")
+            print("   - Will find zip files anywhere in your Drive")
+            print("   - Use if files are in multiple locations")
+            print()
+            print("2. Select a specific folder")
+            print("   - Faster and more organized")
+            print("   - Recommended if all files are in one folder")
+            print()
+            
+            choice = input("Choose option (1 or 2, default is 1): ").strip()
+            
+            if choice == '2':
+                return self._browse_folders(service)
+            else:
+                print("✓ Will search all of Google Drive for zip files")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error selecting folder: {e}")
+            print(f"⚠️  Error accessing Google Drive: {e}")
+            print("   You can manually set folder_id in config.yaml later")
+            return None
+    
+    def _browse_folders(self, service) -> Optional[str]:
+        """Browse and select a folder from Google Drive."""
+        try:
+            print("\n" + "=" * 60)
+            print("Browse Google Drive Folders")
+            print("=" * 60)
+            print()
+            print("Fetching folders from Google Drive...")
+            
+            # List folders (mimeType = 'application/vnd.google-apps.folder')
+            query = "mimeType='application/vnd.google-apps.folder' and trashed=false"
+            results = service.files().list(
+                q=query,
+                fields="files(id, name, parents)",
+                pageSize=100,
+                orderBy="name"
+            ).execute()
+            
+            folders = results.get('files', [])
+            
+            if not folders:
+                print("No folders found in Google Drive.")
+                print("You can manually enter a folder ID in config.yaml")
+                return None
+            
+            print(f"\nFound {len(folders)} folder(s):")
+            print()
+            
+            # Show folders
+            for i, folder in enumerate(folders[:50], 1):  # Limit to 50 for display
+                name = folder.get('name', 'Unnamed')
+                folder_id = folder.get('id', '')
+                print(f"  {i}. {name} (ID: {folder_id})")
+            
+            if len(folders) > 50:
+                print(f"  ... and {len(folders) - 50} more folders")
+            
+            print()
+            print("Options:")
+            print("  - Enter a number (1-{}) to select a folder".format(min(50, len(folders))))
+            print("  - Enter a folder ID directly (if you know it)")
+            print("  - Enter 'url' to paste a Google Drive folder URL")
+            print("  - Press Enter to skip (search all Drive)")
+            print()
+            
+            user_input = input("Your choice: ").strip()
+            
+            if not user_input:
+                print("✓ Will search all of Google Drive")
+                return None
+            
+            # Try to parse as number
+            try:
+                folder_num = int(user_input)
+                if 1 <= folder_num <= min(50, len(folders)):
+                    selected_folder = folders[folder_num - 1]
+                    folder_id = selected_folder.get('id')
+                    folder_name = selected_folder.get('name', 'Unnamed')
+                    print(f"✓ Selected folder: {folder_name}")
+                    print(f"  Folder ID: {folder_id}")
+                    return folder_id
+                else:
+                    print("Invalid folder number")
+                    return None
+            except ValueError:
+                # Not a number, try as folder ID or URL
+                if user_input.lower() == 'url':
+                    url = input("Paste the Google Drive folder URL: ").strip()
+                    # Extract folder ID from URL
+                    # URLs look like: https://drive.google.com/drive/folders/FOLDER_ID
+                    if 'folders/' in url:
+                        folder_id = url.split('folders/')[-1].split('?')[0].split('&')[0]
+                        print(f"✓ Extracted folder ID: {folder_id}")
+                        return folder_id
+                    else:
+                        print("Invalid URL format")
+                        return None
+                else:
+                    # Assume it's a folder ID
+                    print(f"✓ Using folder ID: {user_input}")
+                    return user_input
+                    
+        except Exception as e:
+            logger.error(f"Error browsing folders: {e}")
+            print(f"⚠️  Error browsing folders: {e}")
+            return None
 
 
 class AppleAuthSetup:
@@ -360,6 +501,9 @@ def run_auth_setup_wizard() -> bool:
         print("\n✗ Google Drive authentication failed.")
         return False
     
+    # Select Google Drive folder
+    folder_id = google_auth.select_google_drive_folder()
+    
     # Apple/iCloud setup
     print("\n" + "=" * 60)
     print("Apple/iCloud Setup")
@@ -388,7 +532,8 @@ def run_auth_setup_wizard() -> bool:
     # Save configuration
     config = {
         'google_drive': {
-            'credentials_file': 'credentials.json'
+            'credentials_file': 'credentials.json',
+            'folder_id': folder_id if folder_id else ''
         },
         'icloud': apple_config,
         'processing': {
