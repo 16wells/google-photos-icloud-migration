@@ -16,6 +16,8 @@ from extractor import Extractor
 from metadata_merger import MetadataMerger
 from album_parser import AlbumParser
 from icloud_uploader import iCloudUploader, iCloudPhotosSyncUploader
+from migration_statistics import MigrationStatistics
+from report_generator import ReportGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +78,9 @@ class MigrationOrchestrator:
         # Continue prompt handling
         self._skip_continue_prompts = False
         self._restart_requested = False
+        
+        # Statistics tracking
+        self.statistics = MigrationStatistics()
     
     def _load_config(self, config_path: str) -> Dict:
         """Load configuration from YAML file."""
@@ -106,6 +111,8 @@ class MigrationOrchestrator:
         log_config = self.config.get('logging', {})
         level = getattr(logging, log_config.get('level', 'INFO'))
         log_file = log_config.get('file', 'migration.log')
+        # Store log file path for report generation
+        self.log_file_path = Path(log_file)
         
         class SafeFileHandler(logging.FileHandler):
             """File handler that gracefully handles disk space errors."""
@@ -156,6 +163,9 @@ class MigrationOrchestrator:
             pattern=drive_config.get('zip_file_pattern') or None
         )
         
+        self.statistics.zip_files_total = len(zip_files)
+        self.statistics.zip_files_downloaded = len(zip_files)
+        
         logger.info(f"Downloaded {len(zip_files)} zip files")
         return zip_files
     
@@ -198,6 +208,11 @@ class MigrationOrchestrator:
         for extracted_dir in extracted_dirs:
             pairs = self.extractor.identify_media_json_pairs(extracted_dir)
             all_pairs.update(pairs)
+        
+        # Track statistics
+        total_media = len(all_pairs)
+        with_metadata = sum(1 for v in all_pairs.values() if v is not None)
+        self.statistics.record_media_files(total_media, with_metadata)
         
         logger.info(f"Found {len(all_pairs)} media files to process")
         
@@ -252,6 +267,7 @@ class MigrationOrchestrator:
         self.album_parser.parse_from_json_metadata(media_json_pairs)
         
         albums = self.album_parser.get_all_albums()
+        self.statistics.record_albums(len(albums))
         logger.info(f"Identified {len(albums)} albums")
         
         return albums
@@ -320,6 +336,7 @@ class MigrationOrchestrator:
         # Create verification failure callback
         def verification_failure_callback(failed_file_path: Path):
             """Callback for handling verification failures."""
+            self.statistics.record_verification_failure(failed_file_path.name, "Verification failed")
             action = self._handle_verification_failure(failed_file_path)
             if action == 'stop':
                 raise MigrationStoppedException(f"Migration stopped by user due to verification failure for {failed_file_path.name}")
@@ -349,6 +366,17 @@ class MigrationOrchestrator:
         
         successful = sum(1 for v in results.values() if v)
         failed_count = len(results) - successful
+        
+        # Track statistics
+        for file_path, success in results.items():
+            file_size = file_path.stat().st_size if file_path.exists() else 0
+            self.statistics.record_upload(
+                file_path.name,
+                size=file_size,
+                success=success,
+                error=None if success else "Upload failed"
+            )
+        
         logger.info(f"Uploaded {successful}/{len(results)} files to iCloud Photos")
         
         # Save failed uploads for retry
@@ -605,6 +633,7 @@ class MigrationOrchestrator:
         # Create verification failure callback
         def verification_failure_callback(failed_file_path: Path):
             """Callback for handling verification failures."""
+            self.statistics.record_verification_failure(failed_file_path.name, "Verification failed")
             action = self._handle_verification_failure(failed_file_path)
             if action == 'stop':
                 raise MigrationStoppedException(f"Migration stopped by user due to verification failure for {failed_file_path.name}")
@@ -700,11 +729,15 @@ class MigrationOrchestrator:
             # Extract this zip file
             try:
                 extracted_dir = self.extractor.extract_zip(zip_path)
+                self.statistics.record_zip_extraction(zip_path.name, success=True)
             except (zipfile.BadZipFile, RuntimeError) as e:
                 # Handle corrupted zip file (BadZipFile from extractor, RuntimeError from validation)
                 error_msg = str(e)
                 logger.error(f"❌ Corrupted zip file detected: {zip_path.name}")
                 logger.error(f"   Error: {error_msg}")
+                
+                # Track statistics
+                self.statistics.record_zip_corrupted(zip_path.name, error_msg)
                 
                 # Save to corrupted zips file if we have file_info
                 if file_info:
@@ -725,6 +758,11 @@ class MigrationOrchestrator:
             # Process metadata for this zip
             media_json_pairs = self.extractor.identify_media_json_pairs(extracted_dir)
             logger.info(f"Found {len(media_json_pairs)} media files in this zip")
+            
+            # Track statistics
+            total_media = len(media_json_pairs)
+            with_metadata = sum(1 for v in media_json_pairs.values() if v is not None)
+            self.statistics.record_media_files(total_media, with_metadata)
             
             if not media_json_pairs:
                 logger.warning(f"No media files found in {zip_path.name}, skipping")
@@ -749,6 +787,7 @@ class MigrationOrchestrator:
             parser.parse_from_directory_structure(extracted_dir)
             parser.parse_from_json_metadata(media_json_pairs)
             albums = parser.get_all_albums()
+            self.statistics.record_albums(len(albums))
             
             # Upload files from this zip
             if self.icloud_uploader is None:
@@ -781,6 +820,7 @@ class MigrationOrchestrator:
             # Create verification failure callback
             def verification_failure_callback(failed_file_path: Path):
                 """Callback for handling verification failures."""
+                self.statistics.record_verification_failure(failed_file_path.name, "Verification failed")
                 action = self._handle_verification_failure(failed_file_path)
                 if action == 'stop':
                     raise RuntimeError(f"Migration stopped by user due to verification failure for {failed_file_path.name}")
@@ -825,6 +865,17 @@ class MigrationOrchestrator:
             
             successful = sum(1 for v in upload_results.values() if v)
             failed_count = len(upload_results) - successful
+            
+            # Track statistics
+            for file_path, success in upload_results.items():
+                file_size = file_path.stat().st_size if file_path.exists() else 0
+                self.statistics.record_upload(
+                    file_path.name,
+                    size=file_size,
+                    success=success,
+                    error=None if success else "Upload failed"
+                )
+            
             logger.info(f"Uploaded {successful}/{len(upload_results)} files from {zip_path.name}")
             
             # Save failed uploads for retry
@@ -842,6 +893,7 @@ class MigrationOrchestrator:
                 logger.info(f"✓ Cleaned up extracted files for {zip_path.name}")
             
             logger.info(f"✓ Completed processing {zip_path.name}")
+            self.statistics.record_zip_processed(success=True)
             return True
             
         except MigrationStoppedException:
@@ -849,6 +901,7 @@ class MigrationOrchestrator:
             raise
         except Exception as e:
             logger.error(f"Failed to process {zip_path.name}: {e}", exc_info=True)
+            self.statistics.record_zip_processed(success=False)
             return False
     
     def _restart_from_scratch(self):
@@ -955,8 +1008,10 @@ class MigrationOrchestrator:
         """
         # If retry mode, just retry failed uploads and exit
         if retry_failed:
+            self.statistics.start()
             self.setup_icloud_uploader(use_sync_method=use_sync_method)
             self.retry_failed_uploads(use_sync_method=use_sync_method)
+            self._generate_final_report(0, 0)
             return
         
         try:
@@ -968,6 +1023,9 @@ class MigrationOrchestrator:
             drive_config = self.config['google_drive']
             zip_dir = self.base_dir / self.config['processing']['zip_dir']
             
+            # Start statistics tracking
+            self.statistics.start()
+            
             # List files without downloading
             zip_file_list = self.downloader.list_zip_files(
                 folder_id=drive_config.get('folder_id') or None,
@@ -976,13 +1034,17 @@ class MigrationOrchestrator:
             
             if not zip_file_list:
                 logger.error("No zip files found. Exiting.")
+                self._generate_final_report(0, 0)
                 return
+            
+            self.statistics.zip_files_total = len(zip_file_list)
             
             # Check for already-downloaded zip files
             existing_zips = self._find_existing_zips(zip_dir, zip_file_list)
             
             if existing_zips:
                 total_size_gb = sum(f.stat().st_size for f in existing_zips) / (1024 ** 3)
+                self.statistics.zip_files_skipped_existing = len(existing_zips)
                 logger.info("")
                 logger.info("=" * 60)
                 logger.info(f"Found {len(existing_zips)} already-downloaded zip files ({total_size_gb:.2f} GB)")
@@ -1035,6 +1097,7 @@ class MigrationOrchestrator:
                     if not self._skip_continue_prompts:
                         if not self._ask_continue_after_zip(processed_count, total_zips):
                             logger.info("Migration stopped by user after zip file processing.")
+                            self._generate_final_report(successful, total_zips)
                             return
                         
                         # Check if restart was requested
@@ -1048,6 +1111,7 @@ class MigrationOrchestrator:
                 except MigrationStoppedException as e:
                     logger.info("Migration stopped by user.")
                     logger.info(f"Reason: {e}")
+                    self._generate_final_report(successful, total_zips)
                     return
                 except Exception as e:
                     failed += 1
@@ -1069,7 +1133,18 @@ class MigrationOrchestrator:
                     logger.info(f"Downloading zip {processed_count}/{total_zips}: {file_info['name']}")
                     logger.info("=" * 60)
                     
-                    zip_file = self.downloader.download_single_zip(file_info, zip_dir)
+                    try:
+                        zip_file = self.downloader.download_single_zip(file_info, zip_dir)
+                        file_size = zip_file.stat().st_size if zip_file.exists() else 0
+                        self.statistics.record_zip_download(file_info['name'], size=file_size, success=True)
+                    except Exception as download_error:
+                        self.statistics.record_zip_download(
+                            file_info['name'], 
+                            size=0, 
+                            success=False, 
+                            error=str(download_error)
+                        )
+                        raise
                     
                     # Process this zip file (file_info is already available)
                     if self.process_single_zip(zip_file, processed_count, total_zips, use_sync_method, file_info=file_info):
@@ -1087,6 +1162,7 @@ class MigrationOrchestrator:
                     if not self._skip_continue_prompts:
                         if not self._ask_continue_after_zip(processed_count, total_zips):
                             logger.info("Migration stopped by user after zip file processing.")
+                            self._generate_final_report(successful, total_zips)
                             return
                         
                         # Check if restart was requested
@@ -1100,6 +1176,7 @@ class MigrationOrchestrator:
                 except MigrationStoppedException as e:
                     logger.info("Migration stopped by user.")
                     logger.info(f"Reason: {e}")
+                    self._generate_final_report(successful, total_zips)
                     return
                 except Exception as e:
                     failed += 1
@@ -1163,11 +1240,68 @@ class MigrationOrchestrator:
                 logger.warning(f"Failed uploads saved to: {self.failed_uploads_file}")
                 logger.warning("To retry failed uploads, run:")
                 logger.warning(f"  python main.py --config {self.config_path} --retry-failed")
-            logger.info("=" * 60)
+            
+            # Generate final report
+            self._generate_final_report(successful, total_zips)
             
         except Exception as e:
+            self.statistics.finish()
             logger.error(f"Migration failed: {e}", exc_info=True)
+            # Generate report even on failure
+            self._generate_final_report(0, 0)
             raise
+    
+    def _generate_final_report(self, successful: int = 0, total_zips: int = 0):
+        """
+        Generate and save the final migration report.
+        
+        Args:
+            successful: Number of successfully processed zip files
+            total_zips: Total number of zip files
+        """
+        # Finish statistics tracking
+        self.statistics.finish()
+        
+        # Generate and save report
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info("GENERATING MIGRATION REPORT")
+        logger.info("=" * 80)
+        
+        report_generator = ReportGenerator(
+            statistics=self.statistics,
+            base_dir=self.base_dir,
+            log_file=self.log_file_path if hasattr(self, 'log_file_path') else None,
+            failed_uploads_file=self.failed_uploads_file,
+            corrupted_zips_file=self.corrupted_zips_file
+        )
+        
+        report_path = report_generator.save_report()
+        logger.info("")
+        logger.info(f"✓ Migration report saved to: {report_path.absolute()}")
+        logger.info("")
+        
+        # Also save statistics to JSON
+        stats_path = self.base_dir / 'migration_statistics.json'
+        self.statistics.save(stats_path)
+        logger.info(f"✓ Statistics saved to: {stats_path.absolute()}")
+        logger.info("")
+        
+        # Print summary to console
+        logger.info("=" * 80)
+        logger.info("MIGRATION SUMMARY")
+        logger.info("=" * 80)
+        logger.info("")
+        if total_zips > 0:
+            logger.info(f"Zip Files:        {successful}/{total_zips} successful")
+        logger.info(f"Media Files:      {self.statistics.media_files_found} found, {self.statistics.files_uploaded_successfully} uploaded")
+        logger.info(f"Albums:           {self.statistics.albums_identified} identified")
+        if self.statistics.get_duration():
+            logger.info(f"Duration:         {report_generator._format_duration(self.statistics.get_duration())}")
+        logger.info("")
+        logger.info(f"📄 Full report:   {report_path.absolute()}")
+        logger.info(f"📊 Statistics:    {stats_path.absolute()}")
+        logger.info("=" * 80)
 
 
 def main():
