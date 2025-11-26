@@ -5,6 +5,7 @@ import os
 import json
 import shutil
 import time
+import socket
 from pathlib import Path
 from typing import List, Optional
 from googleapiclient.discovery import build
@@ -15,6 +16,7 @@ from google.auth.transport.requests import Request
 from googleapiclient.errors import HttpError
 import io
 import logging
+import httplib2
 
 from exceptions import DownloadError, AuthenticationError
 
@@ -96,7 +98,19 @@ class DriveDownloader:
             with open(token_file, 'w') as token:
                 token.write(creds.to_json())
         
-        self.service = build('drive', 'v3', credentials=creds)
+        # Configure HTTP client with increased timeouts for large file downloads
+        # Default socket timeout is often too short for multi-GB files
+        try:
+            # Set timeout to 10 minutes (600 seconds) for large file downloads
+            http = httplib2.Http(timeout=600)
+            http.disable_ssl_certificate_validation = False
+            self.service = build('drive', 'v3', credentials=creds, http=http)
+            logger.debug("Using custom HTTP client with 10-minute timeout for large file downloads")
+        except Exception as e:
+            # Fall back to default HTTP client if configuration fails
+            logger.warning(f"Could not configure custom HTTP timeout: {e}. Using default HTTP client.")
+            self.service = build('drive', 'v3', credentials=creds)
+        
         logger.info("Successfully authenticated with Google Drive API")
     
     def _can_open_browser(self):
@@ -282,7 +296,7 @@ class DriveDownloader:
     def download_file(self, file_id: str, file_name: str, 
                      destination_dir: Path, file_size: Optional[int] = None) -> Path:
         """
-        Download a file from Google Drive.
+        Download a file from Google Drive with resumable download support.
         
         Args:
             file_id: Google Drive file ID
@@ -296,10 +310,27 @@ class DriveDownloader:
         destination_dir.mkdir(parents=True, exist_ok=True)
         destination_path = destination_dir / file_name
         
-        # Skip if file already exists
+        # Check if we have a partial download
         if destination_path.exists():
-            logger.info(f"File {file_name} already exists, skipping download")
-            return destination_path
+            existing_size = destination_path.stat().st_size
+            # If file exists and is smaller than expected, it might be partial
+            if file_size and existing_size < file_size and existing_size > 0:
+                logger.warning(
+                    f"Found partial download of {file_name} ({existing_size / 1024 / 1024:.2f} MB of "
+                    f"expected {file_size / 1024 / 1024:.2f} MB). "
+                    f"This partial file will be deleted and download will restart."
+                )
+                # Delete partial file - we'll restart the download from beginning
+                destination_path.unlink()
+                logger.info("Deleted partial file, will restart download from beginning")
+            elif file_size and existing_size >= file_size:
+                # File appears complete
+                logger.info(f"File {file_name} already exists and appears complete, skipping download")
+                return destination_path
+            else:
+                # File exists but we can't verify size - skip it
+                logger.info(f"File {file_name} already exists, skipping download")
+                return destination_path
         
         # Check disk space before downloading
         if file_size:
@@ -313,46 +344,118 @@ class DriveDownloader:
         logger.info(f"Downloading {file_name}...")
         
         # Retry logic for downloads with exponential backoff
-        max_retries = 3
-        retry_delay = 2.0
+        # Use more retries for timeout errors specifically
+        max_retries = 5  # Increased from 3 to handle timeouts better
+        retry_delay = 5.0  # Increased initial delay
+        timeout_retries = 0
+        max_timeout_retries = 10  # Additional retries specifically for timeouts
         
         for attempt in range(max_retries):
             try:
                 request = self.service.files().get_media(fileId=file_id)
-                fh = io.FileIO(destination_path, 'wb')
+                fh = io.FileIO(destination_path, 'wb')  # Always start fresh
+                
                 downloader = MediaIoBaseDownload(fh, request)
                 
+                # Track progress for large files
+                last_progress = 0
                 done = False
                 while done is False:
                     status, done = downloader.next_chunk()
                     if status:
-                        logger.debug(f"Download progress: {int(status.progress() * 100)}%")
+                        progress = int(status.progress() * 100)
+                        # Log progress every 10% for large files
+                        if progress - last_progress >= 10 or done:
+                            downloaded_mb = destination_path.stat().st_size / 1024 / 1024
+                            logger.info(
+                                f"Download progress: {progress}% "
+                                f"({downloaded_mb:.1f} MB downloaded)"
+                            )
+                            last_progress = progress
                 
-                logger.info(f"Downloaded {file_name} ({destination_path.stat().st_size / 1024 / 1024:.2f} MB)")
+                fh.close()
+                
+                # Verify file size if we know the expected size
+                final_size = destination_path.stat().st_size
+                if file_size and final_size < file_size:
+                    logger.warning(
+                        f"Downloaded file size ({final_size / 1024 / 1024:.2f} MB) "
+                        f"is smaller than expected ({file_size / 1024 / 1024:.2f} MB). "
+                        f"File may be incomplete."
+                    )
+                
+                logger.info(f"Downloaded {file_name} ({final_size / 1024 / 1024:.2f} MB)")
                 return destination_path
                 
+            except socket.timeout as e:
+                timeout_retries += 1
+                if timeout_retries <= max_timeout_retries:
+                    wait_time = retry_delay * (2 ** min(attempt, 3))  # Cap exponential growth
+                    logger.warning(
+                        f"Download timeout for {file_name} (timeout retry {timeout_retries}/{max_timeout_retries}): "
+                        f"{e}. The connection timed out during download. "
+                        f"Retrying in {wait_time:.1f} seconds..."
+                    )
+                    time.sleep(wait_time)
+                    # Remove partial file if it exists - we'll restart from beginning
+                    if destination_path.exists():
+                        partial_size = destination_path.stat().st_size
+                        logger.info(f"Removing partial file ({partial_size / 1024 / 1024:.2f} MB) to restart download")
+                        destination_path.unlink()
+                    continue
+                else:
+                    raise DownloadError(
+                        f"Download failed for {file_name} after {max_timeout_retries} timeout retries: {e}. "
+                        f"This may indicate a network connectivity issue or very slow connection. "
+                        f"You can try running the script again - partial files will be automatically deleted and "
+                        f"downloads will restart from the beginning."
+                    ) from e
             except HttpError as e:
-                if attempt < max_retries - 1 and e.resp.status in (500, 502, 503, 504):
+                if attempt < max_retries - 1 and e.resp.status in (500, 502, 503, 504, 429):
                     wait_time = retry_delay * (2 ** attempt)
                     logger.warning(
                         f"Download failed for {file_name} (attempt {attempt + 1}/{max_retries}): "
                         f"HTTP {e.resp.status}. Retrying in {wait_time:.1f} seconds..."
                     )
                     time.sleep(wait_time)
-                    # Remove partial file if it exists
-                    if destination_path.exists():
-                        destination_path.unlink()
+                    # Don't remove partial file for server errors - we might be able to resume
                     continue
                 else:
                     raise DownloadError(
                         f"Failed to download {file_name} from Google Drive: HTTP {e.resp.status} - {e}"
                     ) from e
             except (OSError, IOError) as e:
+                # For I/O errors, check if it's a timeout-related error
+                error_str = str(e).lower()
+                if 'timeout' in error_str or 'timed out' in error_str:
+                    timeout_retries += 1
+                    if timeout_retries <= max_timeout_retries:
+                        wait_time = retry_delay * (2 ** min(attempt, 3))
+                        logger.warning(
+                            f"IO timeout for {file_name} (timeout retry {timeout_retries}/{max_timeout_retries}): "
+                            f"{e}. Retrying in {wait_time:.1f} seconds..."
+                        )
+                        time.sleep(wait_time)
+                        continue
+                
                 raise DownloadError(
                     f"Failed to save {file_name} to disk: {e}. "
                     f"Check disk space and file permissions."
                 ) from e
             except Exception as e:
+                # Check if it's a timeout-related exception
+                error_str = str(e).lower()
+                if 'timeout' in error_str or 'timed out' in error_str:
+                    timeout_retries += 1
+                    if timeout_retries <= max_timeout_retries:
+                        wait_time = retry_delay * (2 ** min(attempt, 3))
+                        logger.warning(
+                            f"Timeout error for {file_name} (timeout retry {timeout_retries}/{max_timeout_retries}): "
+                            f"{e}. Retrying in {wait_time:.1f} seconds..."
+                        )
+                        time.sleep(wait_time)
+                        continue
+                
                 raise DownloadError(
                     f"Unexpected error downloading {file_name}: {e}"
                 ) from e
