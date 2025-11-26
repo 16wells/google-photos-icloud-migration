@@ -1,0 +1,23 @@
+{
+  "title": "Test Photo",
+  "photoTakenTime": {
+    "timestamp": "1609459200",
+    "formatted": "2021-01-01 00:00:00 UTC"
+  },
+  "creationTime": {
+    "timestamp": "1609459200",
+    "formatted": "2021-01-01 00:00:00 UTC"
+  },
+  "geoData": {
+    "latitude": 37.7749,
+    "longitude": -122.4194
+  },
+  "geoDataExif": {
+    "latitude": 37.7749,
+    "longitude": -122.4194
+  },
+  "description": "Test description for a sample photo",
+  "people": [],
+  "favorited": false
+}
+
