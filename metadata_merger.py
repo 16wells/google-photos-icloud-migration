@@ -184,15 +184,15 @@ class MetadataMerger:
         args = self.build_exiftool_args(media_file, json_file, metadata)
         
         # Run ExifTool
-        result = subprocess.run(
-            args,
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        
-        logger.debug(f"Merged metadata for {media_file.name}")
+        try:
+            result = subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                check=True
+            )
             
+            logger.debug(f"Merged metadata for {media_file.name}")
         except subprocess.CalledProcessError as e:
             logger.error(f"ExifTool failed for {media_file.name}: {e.stderr}")
             raise MetadataError(
