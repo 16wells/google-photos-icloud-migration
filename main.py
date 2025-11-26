@@ -399,11 +399,12 @@ class MigrationOrchestrator:
         logger.info("  (C) Continue - Process the next zip file")
         logger.info("  (A) Continue All - Process all remaining zip files without asking")
         logger.info("  (S) Stop - Stop processing and exit")
+        logger.info("  (R) Restart from scratch - Redownload all zip files and reprocess everything")
         logger.info("")
         
         while True:
             try:
-                choice = input("Enter your choice (C/A/S): ").strip().upper()
+                choice = input("Enter your choice (C/A/S/R): ").strip().upper()
                 if choice == 'C':
                     logger.info("Continuing to next zip file...")
                     return True
@@ -415,8 +416,12 @@ class MigrationOrchestrator:
                 elif choice == 'S':
                     logger.info("Stopping migration as requested.")
                     return False
+                elif choice == 'R':
+                    logger.info("Restarting from scratch as requested...")
+                    self._restart_requested = True
+                    return True  # Return True to continue, but restart will be handled in run()
                 else:
-                    logger.warning("Invalid choice. Please enter C (Continue), A (Continue All), or S (Stop).")
+                    logger.warning("Invalid choice. Please enter C (Continue), A (Continue All), S (Stop), or R (Restart from scratch).")
             except (EOFError, KeyboardInterrupt) as e:
                 logger.warning("")
                 logger.warning("Input interrupted. Stopping migration.")
@@ -846,6 +851,76 @@ class MigrationOrchestrator:
             logger.error(f"Failed to process {zip_path.name}: {e}", exc_info=True)
             return False
     
+    def _restart_from_scratch(self):
+        """
+        Clean up all downloaded files, extracted files, processed files, and tracking files.
+        This allows the migration to restart from scratch, re-downloading and reprocessing everything.
+        """
+        logger.info("=" * 60)
+        logger.info("Restarting from scratch - Cleaning up all files and history")
+        logger.info("=" * 60)
+        
+        import shutil
+        
+        # Clean up zip files
+        zip_dir = self.base_dir / self.config['processing']['zip_dir']
+        if zip_dir.exists():
+            zip_files = list(zip_dir.glob("*.zip"))
+            if zip_files:
+                logger.info(f"Deleting {len(zip_files)} downloaded zip file(s)...")
+                for zip_file in zip_files:
+                    try:
+                        zip_file.unlink()
+                        logger.debug(f"  Deleted: {zip_file.name}")
+                    except Exception as e:
+                        logger.warning(f"  Could not delete {zip_file.name}: {e}")
+        
+        # Clean up extracted files
+        extracted_dir = self.base_dir / self.config['processing']['extracted_dir']
+        if extracted_dir.exists():
+            logger.info(f"Deleting extracted files directory: {extracted_dir}")
+            try:
+                shutil.rmtree(extracted_dir)
+                logger.info("  ✓ Deleted extracted files")
+            except Exception as e:
+                logger.warning(f"  Could not delete extracted directory: {e}")
+        
+        # Clean up processed files
+        processed_dir = self.base_dir / self.config['processing']['processed_dir']
+        if processed_dir.exists():
+            logger.info(f"Deleting processed files directory: {processed_dir}")
+            try:
+                shutil.rmtree(processed_dir)
+                logger.info("  ✓ Deleted processed files")
+            except Exception as e:
+                logger.warning(f"  Could not delete processed directory: {e}")
+        
+        # Clean up tracking files
+        if self.failed_uploads_file.exists():
+            logger.info(f"Deleting failed uploads tracking file: {self.failed_uploads_file}")
+            try:
+                self.failed_uploads_file.unlink()
+                logger.info("  ✓ Deleted failed uploads file")
+            except Exception as e:
+                logger.warning(f"  Could not delete failed uploads file: {e}")
+        
+        if self.corrupted_zips_file.exists():
+            logger.info(f"Deleting corrupted zips tracking file: {self.corrupted_zips_file}")
+            try:
+                self.corrupted_zips_file.unlink()
+                logger.info("  ✓ Deleted corrupted zips file")
+            except Exception as e:
+                logger.warning(f"  Could not delete corrupted zips file: {e}")
+        
+        # Reset state flags
+        self._skip_continue_prompts = False
+        self.ignore_all_verification_failures = False
+        
+        logger.info("=" * 60)
+        logger.info("✓ Cleanup complete - Ready to restart from scratch")
+        logger.info("=" * 60)
+        logger.info("")
+    
     def _find_existing_zips(self, zip_dir: Path, zip_file_list: List[dict]) -> List[Path]:
         """
         Find zip files that are already downloaded locally.
@@ -962,6 +1037,14 @@ class MigrationOrchestrator:
                             logger.info("Migration stopped by user after zip file processing.")
                             return
                         
+                        # Check if restart was requested
+                        if self._restart_requested:
+                            self._restart_from_scratch()
+                            self._restart_requested = False
+                            logger.info("Restarting migration from scratch...")
+                            # Recursively call run() to restart the entire process
+                            return self.run(use_sync_method=use_sync_method, retry_failed=False)
+                        
                 except MigrationStoppedException as e:
                     logger.info("Migration stopped by user.")
                     logger.info(f"Reason: {e}")
@@ -1005,6 +1088,14 @@ class MigrationOrchestrator:
                         if not self._ask_continue_after_zip(processed_count, total_zips):
                             logger.info("Migration stopped by user after zip file processing.")
                             return
+                        
+                        # Check if restart was requested
+                        if self._restart_requested:
+                            self._restart_from_scratch()
+                            self._restart_requested = False
+                            logger.info("Restarting migration from scratch...")
+                            # Recursively call run() to restart the entire process
+                            return self.run(use_sync_method=use_sync_method, retry_failed=False)
                         
                 except MigrationStoppedException as e:
                     logger.info("Migration stopped by user.")
