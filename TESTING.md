@@ -261,8 +261,8 @@ Before running full migration, verify:
 After successful testing:
 
 1. Update `config.yaml` with production settings
-2. Ensure sufficient disk space on VM
-3. Run full migration: `python3 main.py --config config.yaml`
+2. Ensure sufficient disk space on your Mac (at least 2x your Google Photos data size)
+3. Run full migration: `python3 main.py --config config.yaml --use-sync`
 4. Monitor progress: `tail -f migration.log`
 5. Verify results in iCloud Photos
 

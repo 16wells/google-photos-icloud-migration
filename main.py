@@ -355,7 +355,7 @@ class MigrationOrchestrator:
         is_interactive = sys.stdin.isatty()
         
         if not is_interactive:
-            # In non-interactive mode (e.g., VM), continue automatically
+            # In non-interactive mode, continue automatically
             logger.debug("Non-interactive mode detected, continuing automatically")
             return True
         

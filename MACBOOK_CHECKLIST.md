@@ -71,6 +71,6 @@ Both should be in the repository root directory.
 
 - **Setup script**: `./setup-macbook.sh`
 - **Verification**: `python3 verify-setup.py`
-- **Full guide**: See `PREPARE_MACBOOK.md`
-- **macOS setup**: See `MACOS_SETUP_GUIDE.md`
+- **Full guide**: See [COMPLETE_INSTALLATION_GUIDE.md](COMPLETE_INSTALLATION_GUIDE.md)
+- **Quick start**: See [QUICKSTART.md](QUICKSTART.md) (if you already have prerequisites)
 

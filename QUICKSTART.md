@@ -8,38 +8,33 @@ Get started with the Google Photos to iCloud migration in 5 minutes.
 - [ ] ExifTool installed (`brew install exiftool` on macOS)
 - [ ] Google Drive API credentials (`credentials.json`)
 - [ ] Apple ID credentials
-- [ ] 62 Google Takeout zip files in Google Drive
+- [ ] Google Takeout zip files in Google Drive
 
-## Local Setup (5 minutes)
+## Setup (5 minutes)
 
 1. **Install dependencies:**
 ```bash
 pip install -r requirements.txt
 ```
 
-2. **Configure:**
+2. **Run the Authentication Setup Wizard (Recommended):**
+```bash
+python3 auth_setup.py
+```
+This will guide you through Google Drive OAuth setup and create your `config.yaml` file automatically.
+
+**OR** configure manually:
 ```bash
 cp config.yaml.example config.yaml
 # Edit config.yaml with your settings
 ```
 
-3. **Run:**
+3. **Run with PhotoKit sync method (Recommended):**
 ```bash
-python main.py --config config.yaml
+python3 main.py --config config.yaml --use-sync
 ```
 
-## GCP VM Setup (15 minutes)
-
-1. **Follow GCP_SETUP.md** to create VM and upload files
-
-2. **On VM, run:**
-```bash
-chmod +x setup.sh
-./setup.sh
-cp config.yaml.example config.yaml
-# Edit config.yaml
-python3 main.py --config config.yaml
-```
+This uses Apple's PhotoKit framework to save photos directly to your Photos library, which then syncs to iCloud Photos automatically.
 
 ## Configuration Essentials
 
@@ -60,10 +55,11 @@ processing:
 
 ## First Run
 
-1. **Download phase**: Authenticate with Google Drive (browser opens)
+1. **Download phase**: Authenticate with Google Drive (browser opens automatically)
 2. **Extraction phase**: Automatically extracts all zip files
 3. **Metadata phase**: Merges JSON metadata into files
-4. **Upload phase**: Authenticate with iCloud (may need 2FA code)
+4. **Upload phase**: Photos are saved to your Photos library using PhotoKit (no authentication needed - uses your macOS iCloud account)
+5. **Sync phase**: Photos automatically sync to iCloud Photos if enabled in System Settings
 
 ## Expected Timeline
 
@@ -88,7 +84,8 @@ processing:
 ## Next Steps
 
 - Read **README.md** for detailed documentation
-- Read **GCP_SETUP.md** for cloud setup
+- Read **COMPLETE_INSTALLATION_GUIDE.md** for step-by-step setup on a new MacBook
+- Read **AUTHENTICATION_GUIDE.md** for authentication details
 - Read **TESTING.md** to test before full migration
 
 ## Support

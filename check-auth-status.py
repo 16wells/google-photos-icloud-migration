@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Check iCloud authentication status and cookie validity.
-Helps diagnose 2FA issues on VMs.
+Helps diagnose 2FA authentication issues.
 """
 import os
 import sys
@@ -165,13 +165,13 @@ def test_auth_attempt(apple_id: str):
     print("Authentication Test")
     print("=" * 60)
     print()
-    print("To test authentication, run:")
-    print()
-    print(f"  python3 authenticate_icloud.py {apple_id}")
-    print()
-    print("Or run the main script:")
+    print("To test authentication, run the main script:")
     print()
     print("  python3 main.py --config config.yaml")
+    print()
+    print("Or use the PhotoKit sync method (macOS, recommended):")
+    print()
+    print("  python3 main.py --config config.yaml --use-sync")
     print()
 
 def main():
@@ -179,7 +179,7 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(
-        description='Check iCloud authentication status for VM use'
+        description='Check iCloud authentication status'
     )
     parser.add_argument(
         '--config',
@@ -225,10 +225,12 @@ def main():
     else:
         print("⚠ Authentication setup incomplete")
         print()
-        print("To set up 2FA for VM use:")
-        print("  1. Run: bash setup-vm-2fa.sh")
-        print("  2. Or manually set environment variables")
-        print("  3. See VM_2FA_SETUP.md for details")
+        print("To set up 2FA for non-interactive use:")
+        print("  1. Set ICLOUD_2FA_DEVICE_ID environment variable (device number)")
+        print("  2. Set ICLOUD_2FA_CODE environment variable with the code")
+        print("  3. Or use trusted_device_id and two_fa_code in config.yaml")
+        print("")
+        print("Note: For macOS users, the PhotoKit sync method (--use-sync) doesn't require 2FA.")
     
     print()
     
