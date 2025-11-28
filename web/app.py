@@ -469,6 +469,97 @@ def proceed_after_retries():
     return jsonify({'success': True, 'message': 'Proceeding with cleanup'})
 
 
+@app.route('/api/server/status', methods=['GET'])
+def get_server_status():
+    """Get web server status and health information."""
+    import psutil
+    import os
+    
+    try:
+        # Get current process info
+        current_process = psutil.Process(os.getpid())
+        process_info = {
+            'pid': current_process.pid,
+            'status': current_process.status(),
+            'memory_mb': current_process.memory_info().rss / (1024 * 1024),
+            'cpu_percent': current_process.cpu_percent(interval=0.1),
+            'uptime_seconds': time.time() - current_process.create_time()
+        }
+        
+        # Check if migration is running
+        migration_running = migration_state['status'] == 'running'
+        
+        return jsonify({
+            'success': True,
+            'server_status': 'running',
+            'process_info': process_info,
+            'migration_status': migration_state['status'],
+            'migration_running': migration_running,
+            'port': 5001
+        })
+    except Exception as e:
+        logger.error(f"Error getting server status: {e}")
+        return jsonify({
+            'success': False,
+            'server_status': 'unknown',
+            'error': str(e)
+        }), 500
+
+
+@app.route('/api/server/restart-instructions', methods=['GET'])
+def get_restart_instructions():
+    """Get instructions for restarting the web server."""
+    import platform
+    import sys
+    
+    # Detect the platform and Python command
+    is_mac = platform.system() == 'Darwin'
+    python_cmd = 'python3' if sys.executable.endswith('python3') else 'python'
+    
+    instructions = {
+        'platform': platform.system(),
+        'python_command': python_cmd,
+        'steps': [
+            {
+                'step': 1,
+                'title': 'Stop the current server',
+                'description': 'In the terminal where the web server is running, press Ctrl+C (or Cmd+C on Mac)',
+                'command': None
+            },
+            {
+                'step': 2,
+                'title': 'Restart the server',
+                'description': 'Run the following command in your terminal:',
+                'command': f'{python_cmd} web_server.py'
+            },
+            {
+                'step': 3,
+                'title': 'Refresh your browser',
+                'description': 'Hard refresh your browser (Cmd+Shift+R on Mac, Ctrl+Shift+R on Windows/Linux)',
+                'command': None
+            }
+        ],
+        'alternative_method': {
+            'title': 'Alternative: Restart via Terminal',
+            'description': 'If you can\'t find the terminal window, you can restart from a new terminal:',
+            'commands': [
+                f'# Find and stop the web server process',
+                f'pkill -f web_server.py',
+                f'# Wait a moment, then restart',
+                f'sleep 2',
+                f'{python_cmd} web_server.py'
+            ] if is_mac else [
+                f'# Find and stop the web server process (Windows)',
+                f'taskkill /F /IM python.exe /FI "WINDOWTITLE eq web_server.py*"',
+                f'# Then restart:',
+                f'{python_cmd} web_server.py'
+            ]
+        }
+    }
+    
+    return jsonify(instructions)
+
+
 @app.route('/api/statistics', methods=['GET'])
 def get_statistics():
     """Get migration statistics."""

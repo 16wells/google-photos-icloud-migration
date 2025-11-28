@@ -531,10 +531,153 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+// Server status functions
+async function checkServerStatus() {
+    const statusDiv = document.getElementById('server-status');
+    if (!statusDiv) return;
+    
+    try {
+        const response = await fetch('/api/server/status');
+        const data = await response.json();
+        
+        if (!response.ok) {
+            statusDiv.innerHTML = `
+                <div class="flex items-center space-x-2">
+                    <span class="w-3 h-3 bg-red-400 rounded-full"></span>
+                    <span class="text-sm text-red-700">Status check failed</span>
+                </div>
+            `;
+            return;
+        }
+        
+        const processInfo = data.process_info || {};
+        const uptimeMinutes = Math.floor(processInfo.uptime_seconds / 60);
+        const uptimeHours = Math.floor(uptimeMinutes / 60);
+        const uptimeDisplay = uptimeHours > 0 
+            ? `${uptimeHours}h ${uptimeMinutes % 60}m`
+            : `${uptimeMinutes}m`;
+        
+        statusDiv.innerHTML = `
+            <div class="space-y-2">
+                <div class="flex items-center space-x-2">
+                    <span class="w-3 h-3 bg-green-400 rounded-full animate-pulse"></span>
+                    <span class="text-sm font-medium text-gray-900">Server Running</span>
+                </div>
+                <div class="text-xs text-gray-600 pl-5">
+                    <div>Port: ${data.port || 5001}</div>
+                    <div>Uptime: ${uptimeDisplay}</div>
+                    <div>Memory: ${processInfo.memory_mb ? processInfo.memory_mb.toFixed(1) : 'N/A'} MB</div>
+                    <div>Migration Status: <span class="font-medium">${data.migration_status || 'idle'}</span></div>
+                </div>
+            </div>
+        `;
+    } catch (error) {
+        statusDiv.innerHTML = `
+            <div class="flex items-center space-x-2">
+                <span class="w-3 h-3 bg-yellow-400 rounded-full"></span>
+                <span class="text-sm text-yellow-700">Unable to check status</span>
+            </div>
+        `;
+    }
+}
+
+async function showRestartInstructions() {
+    const modal = document.getElementById('restart-modal');
+    const content = document.getElementById('restart-instructions-content');
+    
+    if (!modal || !content) return;
+    
+    try {
+        const response = await fetch('/api/server/restart-instructions');
+        const data = await response.json();
+        
+        if (!response.ok) {
+            content.innerHTML = '<p class="text-red-600">Failed to load instructions</p>';
+            modal.classList.remove('hidden');
+            return;
+        }
+        
+        let html = `
+            <div class="space-y-4">
+                <div class="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                    <p class="text-sm text-blue-800">
+                        <strong>Note:</strong> You cannot restart the server from within the web interface. 
+                        Follow these instructions to restart it manually.
+                    </p>
+                </div>
+        `;
+        
+        // Add step-by-step instructions
+        data.steps.forEach(step => {
+            html += `
+                <div class="border-l-4 border-primary-500 pl-4 py-2">
+                    <div class="font-semibold text-gray-900">Step ${step.step}: ${step.title}</div>
+                    <p class="text-sm text-gray-600 mt-1">${step.description}</p>
+                    ${step.command ? `
+                        <div class="mt-2 bg-gray-900 rounded p-3">
+                            <code class="text-green-400 text-sm">${escapeHtml(step.command)}</code>
+                            <button onclick="copyToClipboard('${escapeHtml(step.command)}')" class="ml-2 text-xs text-blue-400 hover:text-blue-300">
+                                Copy
+                            </button>
+                        </div>
+                    ` : ''}
+                </div>
+            `;
+        });
+        
+        // Add alternative method
+        if (data.alternative_method) {
+            html += `
+                <div class="mt-4 pt-4 border-t border-gray-200">
+                    <h4 class="font-semibold text-gray-900 mb-2">${data.alternative_method.title}</h4>
+                    <p class="text-sm text-gray-600 mb-2">${data.alternative_method.description}</p>
+                    <div class="bg-gray-900 rounded p-3">
+                        <pre class="text-green-400 text-xs">${data.alternative_method.commands.map(c => escapeHtml(c)).join('\n')}</pre>
+                        <button onclick="copyToClipboard(\`${data.alternative_method.commands.join('\\n')}\`)" class="mt-2 text-xs text-blue-400 hover:text-blue-300">
+                            Copy All
+                        </button>
+                    </div>
+                </div>
+            `;
+        }
+        
+        html += '</div>';
+        content.innerHTML = html;
+        modal.classList.remove('hidden');
+    } catch (error) {
+        content.innerHTML = `<p class="text-red-600">Error loading instructions: ${error.message}</p>`;
+        modal.classList.remove('hidden');
+    }
+}
+
+function closeRestartModal() {
+    const modal = document.getElementById('restart-modal');
+    if (modal) {
+        modal.classList.add('hidden');
+    }
+}
+
+function copyToClipboard(text) {
+    navigator.clipboard.writeText(text).then(() => {
+        // Show a brief success message
+        const button = event.target;
+        const originalText = button.textContent;
+        button.textContent = 'Copied!';
+        button.classList.add('text-green-400');
+        setTimeout(() => {
+            button.textContent = originalText;
+            button.classList.remove('text-green-400');
+        }, 2000);
+    }).catch(err => {
+        console.error('Failed to copy:', err);
+    });
+}
+
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
     refreshStatus();
     loadFailedUploads();
+    checkServerStatus();
     
     // Auto-refresh statistics every 5 seconds
     setInterval(() => {
@@ -550,5 +693,10 @@ document.addEventListener('DOMContentLoaded', () => {
             refreshStatus();
         }
     }, 1000);
+    
+    // Auto-refresh server status every 30 seconds
+    setInterval(() => {
+        checkServerStatus();
+    }, 30000);
 });
 
