@@ -88,10 +88,13 @@ See [WEB_UI.md](WEB_UI.md) for detailed web UI documentation.
 python main.py --config config.yaml
 ```
 
-### Using Photos Library Sync Method (Recommended)
+### Using Photos Library Sync Method (Recommended - Default in Web UI)
 
-For the most reliable uploads with full EXIF metadata preservation, use the PhotoKit-based sync method (macOS only):
+For the most reliable uploads with full EXIF metadata preservation, use the PhotoKit-based sync method (macOS only). **This is now the default in the Web UI.**
 
+**Web UI**: PhotoKit sync is enabled by default - just start the migration.
+
+**Command Line**:
 ```bash
 python main.py --config config.yaml --use-sync
 ```

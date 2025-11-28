@@ -9,7 +9,7 @@ import re
 import threading
 import time
 from pathlib import Path
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, List
 from flask import Flask, render_template, jsonify, request, send_from_directory
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
@@ -52,7 +52,11 @@ migration_state = {
     'error': None,
     'orchestrator': None,
     'stop_requested': False,
-    'thread': None
+    'thread': None,
+    'log_level': 'INFO',
+    'web_handler': None,
+    'proceed_after_retries': False,
+    'paused_for_retries': False
 }
 
 
@@ -66,7 +70,9 @@ def emit_status_update():
     """Emit status update to all connected clients."""
     socketio.emit('status_update', {
         'status': migration_state['status'],
-        'error': migration_state['error']
+        'error': migration_state['error'],
+        'log_level': migration_state.get('log_level', 'INFO'),
+        'paused_for_retries': migration_state.get('paused_for_retries', False)
     })
 
 
@@ -198,19 +204,21 @@ def monitor_statistics(orchestrator):
             time.sleep(5)  # Wait longer on error
 
 
-def run_migration(config_path: str, use_sync_method: bool = False):
+def run_migration(config_path: str, use_sync_method: bool = False, log_level: str = 'INFO'):
     """
     Run migration in a separate thread.
     
     Args:
         config_path: Path to configuration file
         use_sync_method: Whether to use PhotoKit sync method
+        log_level: Logging level (DEBUG, INFO, WARNING, ERROR)
     """
     stats_thread = None
     try:
         migration_state['status'] = 'running'
         migration_state['error'] = None
         migration_state['statistics']['start_time'] = time.time()
+        migration_state['log_level'] = log_level
         emit_status_update()
         
         # Create orchestrator
@@ -219,10 +227,23 @@ def run_migration(config_path: str, use_sync_method: bool = False):
         
         # Set up custom logging handler for web UI
         web_handler = WebProgressLogger()
-        web_handler.setLevel(logging.INFO)
-        web_handler.setFormatter(logging.Formatter('%(message)s'))
+        # Convert string log level to logging constant
+        level_map = {
+            'DEBUG': logging.DEBUG,
+            'INFO': logging.INFO,
+            'WARNING': logging.WARNING,
+            'ERROR': logging.ERROR
+        }
+        log_level_constant = level_map.get(log_level.upper(), logging.INFO)
+        web_handler.setLevel(log_level_constant)
+        # Include timestamp, logger name, and level for better context
+        web_handler.setFormatter(logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        ))
         web_logger = logging.getLogger()
         web_logger.addHandler(web_handler)
+        migration_state['web_handler'] = web_handler
         
         # Start statistics monitoring thread
         stats_thread = threading.Thread(
@@ -237,8 +258,30 @@ def run_migration(config_path: str, use_sync_method: bool = False):
             emit_status_update()
             return
         
-        # Run migration
+        # Run migration in a thread-safe way
+        # The orchestrator will pause if there are failed uploads
         orchestrator.run(use_sync_method=use_sync_method, retry_failed=False)
+        
+        # Check if migration paused for retries (set by orchestrator)
+        if migration_state.get('paused_for_retries', False):
+            migration_state['status'] = 'paused'
+            emit_status_update()
+            # Wait for proceed signal
+            while not migration_state.get('proceed_after_retries', False):
+                if migration_state.get('stop_requested', False):
+                    migration_state['status'] = 'stopped'
+                    orchestrator._stop_requested = True
+                    emit_status_update()
+                    return
+                time.sleep(1)
+            # Signal orchestrator to proceed
+            orchestrator._proceed_after_retries = True
+            migration_state['proceed_after_retries'] = False
+            migration_state['paused_for_retries'] = False
+            migration_state['status'] = 'running'
+            emit_status_update()
+            # Continue with cleanup (orchestrator will handle this)
+            orchestrator._do_final_cleanup()
         
         migration_state['status'] = 'completed'
         if migration_state['statistics']['start_time']:
@@ -262,6 +305,7 @@ def run_migration(config_path: str, use_sync_method: bool = False):
         
         migration_state['thread'] = None
         migration_state['stop_requested'] = False
+        migration_state['web_handler'] = None
 
 
 @app.route('/')
@@ -309,7 +353,9 @@ def get_status():
         'status': migration_state['status'],
         'progress': migration_state['progress'],
         'statistics': migration_state['statistics'],
-        'error': migration_state['error']
+        'error': migration_state['error'],
+        'log_level': migration_state.get('log_level', 'INFO'),
+        'paused_for_retries': migration_state.get('paused_for_retries', False)
     })
 
 
@@ -322,14 +368,21 @@ def start_migration():
     data = request.json or {}
     config_path = data.get('config_path', 'config.yaml')
     use_sync_method = data.get('use_sync_method', False)
+    log_level = data.get('log_level', 'INFO')
     
     if not Path(config_path).exists():
         return jsonify({'error': f'Configuration file not found: {config_path}'}), 404
+    
+    # Validate log level
+    valid_levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR']
+    if log_level.upper() not in valid_levels:
+        return jsonify({'error': f'Invalid log level: {log_level}. Must be one of {valid_levels}'}), 400
     
     # Reset state
     migration_state['status'] = 'idle'
     migration_state['error'] = None
     migration_state['stop_requested'] = False
+    migration_state['log_level'] = log_level.upper()
     migration_state['progress'] = {
         'phase': None,
         'current': 0,
@@ -352,7 +405,7 @@ def start_migration():
     # Start migration in background thread
     thread = threading.Thread(
         target=run_migration,
-        args=(config_path, use_sync_method),
+        args=(config_path, use_sync_method, log_level.upper()),
         daemon=True
     )
     thread.start()
@@ -373,6 +426,47 @@ def stop_migration():
         pass  # The orchestrator will check stop_requested flag
     
     return jsonify({'success': True, 'message': 'Stop request sent'})
+
+
+@app.route('/api/migration/log-level', methods=['POST'])
+def update_log_level():
+    """Update log level for web UI logging."""
+    data = request.json or {}
+    log_level = data.get('log_level', 'INFO')
+    
+    # Validate log level
+    valid_levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR']
+    if log_level.upper() not in valid_levels:
+        return jsonify({'error': f'Invalid log level: {log_level}. Must be one of {valid_levels}'}), 400
+    
+    # Update log level in state
+    migration_state['log_level'] = log_level.upper()
+    
+    # Update handler level if it exists
+    if migration_state['web_handler']:
+        level_map = {
+            'DEBUG': logging.DEBUG,
+            'INFO': logging.INFO,
+            'WARNING': logging.WARNING,
+            'ERROR': logging.ERROR
+        }
+        log_level_constant = level_map.get(log_level.upper(), logging.INFO)
+        migration_state['web_handler'].setLevel(log_level_constant)
+        logger.info(f"Log level updated to {log_level.upper()}")
+    
+    return jsonify({'success': True, 'message': f'Log level updated to {log_level.upper()}'})
+
+
+@app.route('/api/migration/proceed-after-retries', methods=['POST'])
+def proceed_after_retries():
+    """Signal to proceed with cleanup after retrying failed uploads."""
+    if migration_state['status'] != 'paused':
+        return jsonify({'error': 'Migration is not paused for retries'}), 400
+    
+    migration_state['proceed_after_retries'] = True
+    logger.info("Proceed signal received - continuing with cleanup")
+    
+    return jsonify({'success': True, 'message': 'Proceeding with cleanup'})
 
 
 @app.route('/api/statistics', methods=['GET'])
@@ -399,6 +493,177 @@ def get_failed_uploads():
         return jsonify({'failed_uploads': list(failed_data.values())})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+def _retry_failed_uploads(files_to_retry: Optional[List[str]] = None, use_sync_method: bool = False, config_path: Optional[str] = None):
+    """
+    Retry failed uploads (all or specific files).
+    
+    Args:
+        files_to_retry: List of file paths to retry (as strings). If None, retry all.
+        use_sync_method: Whether to use Photos library sync method
+        config_path: Path to config file (used if orchestrator not available)
+    
+    Returns:
+        Dictionary with results
+    """
+    orchestrator = migration_state.get('orchestrator')
+    
+    # If no orchestrator, try to create one from config
+    if not orchestrator:
+        if not config_path:
+            config_path = 'config.yaml'  # Default config path
+        
+        if not Path(config_path).exists():
+            return {'error': 'No orchestrator available and config file not found. Please start a migration first or provide a config path.'}
+        
+        try:
+            orchestrator = MigrationOrchestrator(config_path)
+            migration_state['orchestrator'] = orchestrator
+        except Exception as e:
+            return {'error': f'Failed to create orchestrator: {e}'}
+    base_dir = orchestrator.base_dir
+    failed_uploads_file = base_dir / 'failed_uploads.json'
+    
+    if not failed_uploads_file.exists():
+        return {'error': 'No failed uploads file found.'}
+    
+    try:
+        with open(failed_uploads_file, 'r') as f:
+            failed_data = json.load(f)
+    except Exception as e:
+        return {'error': f'Could not read failed uploads file: {e}'}
+    
+    if not failed_data:
+        return {'error': 'No failed uploads to retry.'}
+    
+    # Filter to specific files if provided
+    if files_to_retry:
+        failed_data = {k: v for k, v in failed_data.items() if k in files_to_retry}
+        if not failed_data:
+            return {'error': 'None of the specified files were found in failed uploads.'}
+    
+    # Setup uploader if needed
+    if orchestrator.icloud_uploader is None:
+        try:
+            orchestrator.setup_icloud_uploader(use_sync_method=use_sync_method)
+        except Exception as e:
+            return {'error': f'Failed to setup uploader: {e}'}
+    
+    # Group files by album
+    from pathlib import Path
+    files_by_album = {}
+    file_to_album = {}
+    for file_path_str, file_data in failed_data.items():
+        file_path = Path(file_data['file'])
+        album_name = file_data.get('album', '')
+        
+        if not file_path.exists():
+            logger.warning(f"File no longer exists: {file_path}")
+            continue
+        
+        if album_name not in files_by_album:
+            files_by_album[album_name] = []
+        files_by_album[album_name].append(file_path)
+        file_to_album[file_path] = album_name
+    
+    if not files_by_album:
+        return {'error': 'No valid files to retry (files may not exist).'}
+    
+    # Upload files
+    from google_photos_icloud_migration.uploader.icloud_uploader import iCloudPhotosSyncUploader
+    all_files = [f for files in files_by_album.values() for f in files]
+    
+    try:
+        if isinstance(orchestrator.icloud_uploader, iCloudPhotosSyncUploader):
+            results = orchestrator.icloud_uploader.upload_files_batch(
+                all_files,
+                albums=file_to_album,
+                verify_after_upload=True
+            )
+        else:
+            results = {}
+            for album_name, files in files_by_album.items():
+                album_results = orchestrator.icloud_uploader.upload_photos_batch(
+                    files,
+                    album_name=album_name if album_name else None,
+                    verify_after_upload=True
+                )
+                results.update(album_results)
+        
+        # Update failed uploads file
+        successful_files = {str(path) for path, success in results.items() if success}
+        remaining_failed = {
+            k: v for k, v in failed_data.items() 
+            if k not in successful_files
+        }
+        
+        # Increment retry count for still-failed files
+        for file_path_str in remaining_failed:
+            remaining_failed[file_path_str]['retry_count'] = \
+                remaining_failed[file_path_str].get('retry_count', 0) + 1
+        
+        # Save updated failed uploads
+        if remaining_failed:
+            with open(failed_uploads_file, 'w') as f:
+                json.dump(remaining_failed, f, indent=2)
+        else:
+            # All succeeded, remove the file
+            if failed_uploads_file.exists():
+                failed_uploads_file.unlink()
+        
+        successful = sum(1 for v in results.values() if v)
+        return {
+            'success': True,
+            'message': f'Retried {successful}/{len(results)} files successfully',
+            'successful_count': successful,
+            'total_count': len(results),
+            'remaining_failed': len(remaining_failed)
+        }
+    except Exception as e:
+        logger.exception("Error retrying failed uploads")
+        return {'error': f'Failed to retry uploads: {e}'}
+
+
+@app.route('/api/failed-uploads/retry', methods=['POST'])
+def retry_failed_uploads():
+    """Retry all or specific failed uploads."""
+    if migration_state['status'] == 'running':
+        return jsonify({'error': 'Cannot retry uploads while migration is running'}), 400
+    
+    data = request.json or {}
+    files_to_retry = data.get('files', None)  # List of file paths, or None for all
+    use_sync_method = data.get('use_sync_method', False)
+    config_path = data.get('config_path', 'config.yaml')
+    
+    result = _retry_failed_uploads(files_to_retry=files_to_retry, use_sync_method=use_sync_method, config_path=config_path)
+    
+    if 'error' in result:
+        return jsonify(result), 400
+    
+    return jsonify(result)
+
+
+@app.route('/api/failed-uploads/retry-single', methods=['POST'])
+def retry_single_failed_upload():
+    """Retry a single failed upload."""
+    if migration_state['status'] == 'running':
+        return jsonify({'error': 'Cannot retry uploads while migration is running'}), 400
+    
+    data = request.json or {}
+    file_path = data.get('file_path')
+    use_sync_method = data.get('use_sync_method', False)
+    config_path = data.get('config_path', 'config.yaml')
+    
+    if not file_path:
+        return jsonify({'error': 'file_path is required'}), 400
+    
+    result = _retry_failed_uploads(files_to_retry=[file_path], use_sync_method=use_sync_method, config_path=config_path)
+    
+    if 'error' in result:
+        return jsonify(result), 400
+    
+    return jsonify(result)
 
 
 @socketio.on('connect')

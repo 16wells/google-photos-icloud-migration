@@ -65,7 +65,7 @@ The main dashboard shows:
 
 1. **Configure Settings:**
    - Enter the path to your `config.yaml` file
-   - Select "Use PhotoKit Sync Method" if desired (recommended for macOS)
+   - "Use PhotoKit Sync Method" is selected by default (recommended for macOS)
    - Click "Load Configuration" to verify settings
 
 2. **Start Migration:**
@@ -88,7 +88,7 @@ The main dashboard shows:
 - Click the "Stop Migration" button to gracefully stop the current migration
 - The migration will complete the current operation before stopping
 
-### Viewing Failed Uploads
+### Viewing and Retrying Failed Uploads
 
 ![Failed Uploads View](docs/images/web-ui-failed-uploads.png)
 
@@ -96,7 +96,32 @@ The main dashboard shows:
 
 - Click "View Failed Uploads" in the Quick Actions panel
 - Failed uploads are displayed with file names, album information, and retry counts
-- You can retry failed uploads using the CLI with `--retry-failed` flag
+- **Individual Retry**: Click the "Retry" button next to any failed upload to retry just that file
+- **Retry All**: Click the "Retry All" button in the Failed Uploads header to retry all failed uploads at once
+- The UI will show loading states and update automatically after retries complete
+
+### Activity Log and Log Levels
+
+The Activity Log shows detailed information about the migration process:
+
+- **Log Level Selector**: Choose the verbosity level (DEBUG, INFO, WARNING, ERROR)
+  - DEBUG: Most detailed, shows all log messages
+  - INFO: Standard level, shows important information (default)
+  - WARNING: Shows warnings and errors only
+  - ERROR: Shows only errors
+- You can change the log level at any time, even during migration
+- Log entries include timestamps, logger names, and full context
+
+### Paused for Retries
+
+If any files fail to upload during migration:
+
+- The migration will automatically pause before cleanup
+- Downloaded zip files are preserved to allow retries
+- A "Proceed with Cleanup" button will appear
+- Use the retry buttons to retry failed uploads
+- Once all retries are complete (or you're ready to proceed), click "Proceed with Cleanup"
+- The migration will then complete cleanup and finish
 
 ### Configuration
 
@@ -104,7 +129,7 @@ The web UI allows you to:
 
 - Load and view your current configuration
 - Change configuration file path
-- Toggle PhotoKit sync method
+- Toggle PhotoKit sync method (enabled by default)
 
 ## Architecture
 
@@ -126,8 +151,12 @@ The web UI allows you to:
 - `POST /api/config` - Save configuration
 - `POST /api/migration/start` - Start migration
 - `POST /api/migration/stop` - Stop migration
+- `POST /api/migration/log-level` - Update log level
+- `POST /api/migration/proceed-after-retries` - Proceed with cleanup after retries
 - `GET /api/statistics` - Get migration statistics
 - `GET /api/failed-uploads` - Get list of failed uploads
+- `POST /api/failed-uploads/retry` - Retry all failed uploads
+- `POST /api/failed-uploads/retry-single` - Retry a single failed upload
 
 ### WebSocket Events
 

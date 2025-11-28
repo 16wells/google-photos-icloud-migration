@@ -140,7 +140,7 @@
                             <input type="text" id="config-path" value="config.yaml" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent">
                         </div>
                         <div class="flex items-center">
-                            <input type="checkbox" id="use-sync" class="w-4 h-4 text-primary-600 border-gray-300 rounded focus:ring-primary-500">
+                            <input type="checkbox" id="use-sync" class="w-4 h-4 text-primary-600 border-gray-300 rounded focus:ring-primary-500" checked>
                             <label for="use-sync" class="ml-2 text-sm text-gray-700">Use PhotoKit Sync Method (Recommended)</label>
                         </div>
                         <button onclick="loadConfig()" class="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors font-medium">
@@ -151,7 +151,18 @@
 
                 <!-- Logs Card -->
                 <div class="bg-white rounded-lg shadow-sm p-6 border border-gray-200">
-                    <h2 class="text-xl font-semibold text-gray-900 mb-4">Activity Log</h2>
+                    <div class="flex items-center justify-between mb-4">
+                        <h2 class="text-xl font-semibold text-gray-900">Activity Log</h2>
+                        <div class="flex items-center space-x-2">
+                            <label for="log-level" class="text-sm font-medium text-gray-700">Log Level:</label>
+                            <select id="log-level" onchange="updateLogLevel()" class="px-3 py-1 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent text-sm">
+                                <option value="DEBUG">DEBUG</option>
+                                <option value="INFO" selected>INFO</option>
+                                <option value="WARNING">WARNING</option>
+                                <option value="ERROR">ERROR</option>
+                            </select>
+                        </div>
+                    </div>
                     <div id="log-container" class="bg-gray-900 rounded-lg p-4 h-64 overflow-y-auto font-mono text-sm">
                         <div class="text-gray-400">Waiting for activity...</div>
                     </div>
@@ -178,7 +189,12 @@
 
                 <!-- Failed Uploads -->
                 <div class="bg-white rounded-lg shadow-sm p-6 border border-gray-200">
-                    <h2 class="text-xl font-semibold text-gray-900 mb-4">Failed Uploads</h2>
+                    <div class="flex items-center justify-between mb-4">
+                        <h2 class="text-xl font-semibold text-gray-900">Failed Uploads</h2>
+                        <button id="retry-all-btn" onclick="retryAllFailedUploads()" class="px-3 py-1 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed" disabled>
+                            Retry All
+                        </button>
+                    </div>
                     <div id="failed-uploads-list" class="space-y-2 max-h-96 overflow-y-auto">
                         <p class="text-sm text-gray-500">No failed uploads</p>
                     </div>

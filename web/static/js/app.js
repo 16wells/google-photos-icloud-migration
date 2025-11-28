@@ -8,6 +8,7 @@ const socket = io();
 // Global state
 let currentStatus = 'idle';
 let configPath = 'config.yaml';
+let currentLogLevel = 'INFO';
 
 // DOM elements
 const elements = {
@@ -18,12 +19,15 @@ const elements = {
     progressMessage: document.getElementById('progress-message'),
     startBtn: document.getElementById('start-btn'),
     stopBtn: document.getElementById('stop-btn'),
+    controlButtons: document.getElementById('control-buttons'),
     logContainer: document.getElementById('log-container'),
     errorDisplay: document.getElementById('error-display'),
     errorMessage: document.getElementById('error-message'),
     failedUploadsList: document.getElementById('failed-uploads-list'),
     configPathInput: document.getElementById('config-path'),
     useSyncCheckbox: document.getElementById('use-sync'),
+    logLevelSelect: document.getElementById('log-level'),
+    retryAllBtn: document.getElementById('retry-all-btn'),
     // Statistics
     statZipTotal: document.getElementById('stat-zip-total'),
     statZipProcessed: document.getElementById('stat-zip-processed'),
@@ -48,7 +52,7 @@ socket.on('disconnect', () => {
 });
 
 socket.on('status_update', (data) => {
-    updateStatus(data.status, data.error);
+    updateStatus(data.status, data.error, data.log_level, data.paused_for_retries);
 });
 
 socket.on('progress_update', (data) => {
@@ -64,7 +68,7 @@ socket.on('log_message', (data) => {
 });
 
 // Status management
-function updateStatus(status, error = null) {
+function updateStatus(status, error = null, logLevel = null, pausedForRetries = false) {
     currentStatus = status;
     
     // Update status badge
@@ -81,7 +85,7 @@ function updateStatus(status, error = null) {
     const statusLabels = {
         'idle': 'Idle',
         'running': 'Running',
-        'paused': 'Paused',
+        'paused': 'Paused for Retries',
         'stopped': 'Stopped',
         'error': 'Error',
         'completed': 'Completed'
@@ -95,15 +99,40 @@ function updateStatus(status, error = null) {
     `;
     
     // Update button states
-    elements.startBtn.disabled = status === 'running';
-    elements.stopBtn.disabled = status !== 'running';
+    elements.startBtn.disabled = status === 'running' || status === 'paused';
+    elements.stopBtn.disabled = status !== 'running' && status !== 'paused';
     
-    if (status === 'running') {
+    if (status === 'running' || status === 'paused') {
         elements.startBtn.classList.add('opacity-50', 'cursor-not-allowed');
         elements.stopBtn.classList.remove('opacity-50', 'cursor-not-allowed');
     } else {
         elements.startBtn.classList.remove('opacity-50', 'cursor-not-allowed');
         elements.stopBtn.classList.add('opacity-50', 'cursor-not-allowed');
+    }
+    
+    // Show/hide proceed button for paused state
+    const proceedBtn = document.getElementById('proceed-btn');
+    if (status === 'paused' && pausedForRetries) {
+        if (!proceedBtn) {
+            // Create proceed button
+            const button = document.createElement('button');
+            button.id = 'proceed-btn';
+            button.onclick = proceedAfterRetries;
+            button.className = 'px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-medium';
+            button.textContent = 'Proceed with Cleanup';
+            elements.controlButtons.appendChild(button);
+        } else {
+            proceedBtn.style.display = 'block';
+        }
+        addLog('warning', 'Migration paused due to failed uploads. Please retry failed uploads, then click "Proceed with Cleanup".');
+    } else if (proceedBtn) {
+        proceedBtn.style.display = 'none';
+    }
+    
+    // Update log level selector if provided
+    if (logLevel && elements.logLevelSelect) {
+        elements.logLevelSelect.value = logLevel;
+        currentLogLevel = logLevel;
     }
     
     // Show error if present
@@ -159,9 +188,30 @@ function updateStatistics(data) {
 }
 
 // Migration control functions
+function updateLogLevel() {
+    currentLogLevel = elements.logLevelSelect.value;
+    addLog('info', `Log level changed to ${currentLogLevel}`);
+    
+    // Update log level on server if migration is running
+    if (currentStatus === 'running') {
+        fetch('/api/migration/log-level', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                log_level: currentLogLevel
+            })
+        }).catch(error => {
+            console.error('Failed to update log level:', error);
+        });
+    }
+}
+
 async function startMigration() {
     configPath = elements.configPathInput.value || 'config.yaml';
     const useSyncMethod = elements.useSyncCheckbox.checked;
+    currentLogLevel = elements.logLevelSelect.value;
     
     try {
         const response = await fetch('/api/migration/start', {
@@ -171,7 +221,8 @@ async function startMigration() {
             },
             body: JSON.stringify({
                 config_path: configPath,
-                use_sync_method: useSyncMethod
+                use_sync_method: useSyncMethod,
+                log_level: currentLogLevel
             })
         });
         
@@ -216,7 +267,7 @@ async function refreshStatus() {
         const response = await fetch('/api/status');
         const data = await response.json();
         
-        updateStatus(data.status, data.error);
+        updateStatus(data.status, data.error, data.log_level, data.paused_for_retries);
         if (data.progress) {
             updateProgress(data.progress);
         }
@@ -225,6 +276,29 @@ async function refreshStatus() {
         }
     } catch (error) {
         showError(`Error refreshing status: ${error.message}`);
+    }
+}
+
+async function proceedAfterRetries() {
+    try {
+        const response = await fetch('/api/migration/proceed-after-retries', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        const data = await response.json();
+        
+        if (!response.ok) {
+            showError(data.error || 'Failed to proceed');
+            return;
+        }
+        
+        addLog('info', 'Proceeding with cleanup after retries...');
+        updateStatus('running');
+    } catch (error) {
+        showError(`Error proceeding: ${error.message}`);
     }
 }
 
@@ -261,14 +335,32 @@ async function loadFailedUploads() {
         
         if (failedUploads.length === 0) {
             elements.failedUploadsList.innerHTML = '<p class="text-sm text-gray-500">No failed uploads</p>';
+            if (elements.retryAllBtn) {
+                elements.retryAllBtn.disabled = true;
+            }
             return;
         }
         
-        elements.failedUploadsList.innerHTML = failedUploads.map(upload => `
-            <div class="p-3 bg-red-50 border border-red-200 rounded-lg">
-                <p class="text-sm font-medium text-red-800 truncate">${upload.file.split('/').pop()}</p>
-                ${upload.album ? `<p class="text-xs text-red-600 mt-1">Album: ${upload.album}</p>` : ''}
-                ${upload.retry_count ? `<p class="text-xs text-red-600">Retries: ${upload.retry_count}</p>` : ''}
+        // Enable retry all button
+        if (elements.retryAllBtn) {
+            elements.retryAllBtn.disabled = false;
+        }
+        
+        elements.failedUploadsList.innerHTML = failedUploads.map((upload, index) => `
+            <div id="failed-upload-${index}" class="p-3 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition-colors">
+                <div class="flex items-start justify-between">
+                    <div class="flex-1 min-w-0">
+                        <p class="text-sm font-medium text-red-800 truncate" title="${escapeHtml(upload.file)}">${escapeHtml(upload.file.split('/').pop())}</p>
+                        ${upload.album ? `<p class="text-xs text-red-600 mt-1">Album: ${escapeHtml(upload.album)}</p>` : ''}
+                        ${upload.retry_count ? `<p class="text-xs text-red-600">Retries: ${upload.retry_count}</p>` : ''}
+                    </div>
+                    <button 
+                        onclick="retrySingleFailedUpload('${escapeHtml(upload.file)}', ${index})" 
+                        class="ml-2 px-2 py-1 text-xs bg-primary-600 text-white rounded hover:bg-primary-700 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                        id="retry-btn-${index}">
+                        Retry
+                    </button>
+                </div>
             </div>
         `).join('');
     } catch (error) {
@@ -276,9 +368,116 @@ async function loadFailedUploads() {
     }
 }
 
+async function retrySingleFailedUpload(filePath, index) {
+    const retryBtn = document.getElementById(`retry-btn-${index}`);
+    const uploadDiv = document.getElementById(`failed-upload-${index}`);
+    
+    if (!retryBtn || retryBtn.disabled) return;
+    
+    // Disable button and show loading state
+    retryBtn.disabled = true;
+    retryBtn.textContent = 'Retrying...';
+    if (uploadDiv) {
+        uploadDiv.classList.add('opacity-75');
+    }
+    
+    try {
+        const useSyncMethod = elements.useSyncCheckbox ? elements.useSyncCheckbox.checked : false;
+        configPath = elements.configPathInput ? elements.configPathInput.value || 'config.yaml' : 'config.yaml';
+        const response = await fetch('/api/failed-uploads/retry-single', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                file_path: filePath,
+                use_sync_method: useSyncMethod,
+                config_path: configPath
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (!response.ok) {
+            showError(data.error || 'Failed to retry upload');
+            if (retryBtn) {
+                retryBtn.disabled = false;
+                retryBtn.textContent = 'Retry';
+            }
+            if (uploadDiv) {
+                uploadDiv.classList.remove('opacity-75');
+            }
+            return;
+        }
+        
+        addLog('info', `Retry result for ${filePath.split('/').pop()}: ${data.message}`);
+        
+        // Refresh the failed uploads list
+        await loadFailedUploads();
+        
+        // Refresh statistics
+        await refreshStatus();
+        
+    } catch (error) {
+        showError(`Error retrying upload: ${error.message}`);
+        if (retryBtn) {
+            retryBtn.disabled = false;
+            retryBtn.textContent = 'Retry';
+        }
+        if (uploadDiv) {
+            uploadDiv.classList.remove('opacity-75');
+        }
+    }
+}
+
+async function retryAllFailedUploads() {
+    if (!elements.retryAllBtn || elements.retryAllBtn.disabled) return;
+    
+    // Disable button and show loading state
+    elements.retryAllBtn.disabled = true;
+    const originalText = elements.retryAllBtn.textContent;
+    elements.retryAllBtn.textContent = 'Retrying...';
+    
+    try {
+        const useSyncMethod = elements.useSyncCheckbox ? elements.useSyncCheckbox.checked : false;
+        configPath = elements.configPathInput ? elements.configPathInput.value || 'config.yaml' : 'config.yaml';
+        const response = await fetch('/api/failed-uploads/retry', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                use_sync_method: useSyncMethod,
+                config_path: configPath
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (!response.ok) {
+            showError(data.error || 'Failed to retry uploads');
+            elements.retryAllBtn.disabled = false;
+            elements.retryAllBtn.textContent = originalText;
+            return;
+        }
+        
+        addLog('info', `Retry all result: ${data.message}`);
+        
+        // Refresh the failed uploads list
+        await loadFailedUploads();
+        
+        // Refresh statistics
+        await refreshStatus();
+        
+    } catch (error) {
+        showError(`Error retrying uploads: ${error.message}`);
+        elements.retryAllBtn.disabled = false;
+        elements.retryAllBtn.textContent = originalText;
+    }
+}
+
 // Logging functions
 function addLog(level, message) {
-    const timestamp = new Date().toLocaleTimeString();
     const levelColors = {
         'info': 'text-blue-400',
         'warning': 'text-yellow-400',
@@ -289,7 +488,8 @@ function addLog(level, message) {
     const color = levelColors[level] || 'text-gray-400';
     const logEntry = document.createElement('div');
     logEntry.className = `mb-1 ${color}`;
-    logEntry.innerHTML = `<span class="text-gray-500">[${timestamp}]</span> <span class="font-medium">[${level.toUpperCase()}]</span> ${escapeHtml(message)}`;
+    // Display the full formatted message from backend (includes timestamp, logger name, level, and message)
+    logEntry.innerHTML = escapeHtml(message);
     
     elements.logContainer.appendChild(logEntry);
     elements.logContainer.scrollTop = elements.logContainer.scrollHeight;

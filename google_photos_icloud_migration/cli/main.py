@@ -120,6 +120,10 @@ class MigrationOrchestrator:
         # Continue prompt handling
         self._skip_continue_prompts = False
         self._restart_requested = False
+        self._proceed_after_retries = False
+        self._paused_for_retries = False
+        self._proceed_after_retries = False
+        self._paused_for_retries = False
     
     def _config_to_dict(self, config: MigrationConfig) -> Dict:
         """Convert MigrationConfig object to dict for backward compatibility."""
@@ -527,6 +531,65 @@ class MigrationOrchestrator:
         
         return results
     
+    def _ask_proceed_after_retries(self) -> bool:
+        """
+        Ask user if they want to proceed with cleanup after retrying failed uploads.
+        
+        Returns:
+            True if user wants to proceed, False if they want to stop
+        """
+        # Check if we're in a non-interactive environment (web UI)
+        import sys
+        is_interactive = sys.stdin.isatty()
+        
+        if not is_interactive:
+            # In non-interactive mode (web UI), wait for proceed signal
+            logger.info("Waiting for proceed signal from web UI...")
+            # Check the proceed flag (set externally by web UI)
+            max_wait = 3600  # Wait up to 1 hour
+            waited = 0
+            while not self._proceed_after_retries and waited < max_wait:
+                time.sleep(1)
+                waited += 1
+                # Check stop flag if available (set by web UI)
+                if hasattr(self, '_stop_requested') and self._stop_requested:
+                    return False
+            
+            if waited >= max_wait:
+                logger.warning("Timeout waiting for proceed signal. Proceeding automatically.")
+                return True
+            
+            self._proceed_after_retries = False  # Reset for next time
+            return True
+        
+        # Interactive mode - ask user
+        logger.info("")
+        logger.info("=" * 60)
+        logger.info("PROCEED WITH CLEANUP?")
+        logger.info("=" * 60)
+        logger.info("You have retried failed uploads (or chosen to proceed anyway).")
+        logger.info("")
+        logger.info("What would you like to do?")
+        logger.info("  (P) Proceed - Continue with cleanup and finish migration")
+        logger.info("  (S) Stop - Stop here and keep files for manual retry later")
+        logger.info("")
+        
+        while True:
+            try:
+                choice = input("Enter your choice (P/S): ").strip().upper()
+                if choice == 'P':
+                    logger.info("Proceeding with cleanup...")
+                    return True
+                elif choice == 'S':
+                    logger.info("Stopping migration. Files kept for manual retry.")
+                    return False
+                else:
+                    logger.warning("Invalid choice. Please enter P (Proceed) or S (Stop).")
+            except (EOFError, KeyboardInterrupt) as e:
+                logger.warning("")
+                logger.warning("Input interrupted. Stopping migration.")
+                return False
+    
     def _ask_migration_type(self) -> bool:
         """
         Ask user if this is a new migration or continuing an existing one.
@@ -890,6 +953,18 @@ class MigrationOrchestrator:
         
         return results
     
+    def _do_final_cleanup(self):
+        """Perform final cleanup of processed files."""
+        if self.config['processing'].get('cleanup_after_upload', False):
+            logger.info("=" * 60)
+            logger.info("Final cleanup")
+            logger.info("=" * 60)
+            processed_dir = self.base_dir / self.config['processing']['processed_dir']
+            if processed_dir.exists():
+                import shutil
+                logger.info(f"Removing processed files: {processed_dir}")
+                shutil.rmtree(processed_dir)
+    
     def cleanup(self):
         """Clean up temporary files."""
         if self.config['processing'].get('cleanup_after_upload', False):
@@ -1059,6 +1134,9 @@ class MigrationOrchestrator:
                 self._save_failed_uploads(failed_files, file_to_album)
                 logger.warning(f"⚠️  {failed_count} files from {zip_path.name} failed to upload")
                 logger.warning(f"Failed uploads saved to: {self.failed_uploads_file}")
+                # Don't delete zip file if there are failed uploads - keep it for retry
+                logger.warning(f"⚠️  Keeping zip file {zip_path.name} for retry of failed uploads")
+                return True  # Return True but don't delete zip
             
             # Cleanup extracted files for this zip (save disk space)
             import shutil
@@ -1246,7 +1324,31 @@ class MigrationOrchestrator:
                     file_info = file_info_by_name.get(existing_zip.name)
                     
                     # Process this zip file
-                    if self.process_single_zip(existing_zip, processed_count, total_zips, use_sync_method, file_info=file_info):
+                    process_result = self.process_single_zip(existing_zip, processed_count, total_zips, use_sync_method, file_info=file_info)
+                    
+                    # Check if there are failed uploads for this zip
+                    has_failed_uploads = self.failed_uploads_file.exists() and self.failed_uploads_file.stat().st_size > 0
+                    if has_failed_uploads:
+                        try:
+                            with open(self.failed_uploads_file, 'r') as f:
+                                failed_data = json.load(f)
+                            # Check if any failed uploads are from this zip's extracted files
+                            zip_has_failures = any(
+                                str(existing_zip.name) in failed_file or 
+                                any(existing_zip.stem in failed_file for failed_file in failed_data.keys())
+                                for failed_file in failed_data.keys()
+                            )
+                            if zip_has_failures:
+                                logger.warning(f"⚠️  Keeping zip file {existing_zip.name} due to failed uploads")
+                                if process_result:
+                                    successful += 1
+                                else:
+                                    failed += 1
+                                continue  # Skip deletion
+                        except Exception:
+                            pass  # If we can't check, proceed normally
+                    
+                    if process_result:
                         successful += 1
                         
                         # Cleanup zip file after successful processing to free up space
@@ -1298,7 +1400,31 @@ class MigrationOrchestrator:
                     zip_file = self.downloader.download_single_zip(file_info, zip_dir)
                     
                     # Process this zip file (file_info is already available)
-                    if self.process_single_zip(zip_file, processed_count, total_zips, use_sync_method, file_info=file_info):
+                    process_result = self.process_single_zip(zip_file, processed_count, total_zips, use_sync_method, file_info=file_info)
+                    
+                    # Check if there are failed uploads for this zip
+                    has_failed_uploads = self.failed_uploads_file.exists() and self.failed_uploads_file.stat().st_size > 0
+                    if has_failed_uploads:
+                        try:
+                            with open(self.failed_uploads_file, 'r') as f:
+                                failed_data = json.load(f)
+                            # Check if any failed uploads are from this zip's extracted files
+                            zip_has_failures = any(
+                                str(zip_file.name) in failed_file or 
+                                any(zip_file.stem in failed_file for failed_file in failed_data.keys())
+                                for failed_file in failed_data.keys()
+                            )
+                            if zip_has_failures:
+                                logger.warning(f"⚠️  Keeping zip file {zip_file.name} due to failed uploads")
+                                if process_result:
+                                    successful += 1
+                                else:
+                                    failed += 1
+                                continue  # Skip deletion
+                        except Exception:
+                            pass  # If we can't check, proceed normally
+                    
+                    if process_result:
                         successful += 1
                         
                         # Cleanup zip file after successful processing to free up space
@@ -1332,19 +1458,48 @@ class MigrationOrchestrator:
                     logger.error(f"Error processing {file_info.get('name', 'unknown')}: {e}", exc_info=True)
                     logger.warning(f"Skipping remaining processing for {file_info.get('name', 'unknown')}")
             
-            # Final cleanup
-            if self.config['processing'].get('cleanup_after_upload', False):
-                logger.info("=" * 60)
-                logger.info("Final cleanup")
-                logger.info("=" * 60)
-                processed_dir = self.base_dir / self.config['processing']['processed_dir']
-                if processed_dir.exists():
-                    import shutil
-                    logger.info(f"Removing processed files: {processed_dir}")
-                    shutil.rmtree(processed_dir)
-            
-            # Check for failed uploads and corrupted zips
+            # Check for failed uploads before final cleanup
             failed_uploads_exist = self.failed_uploads_file.exists() and self.failed_uploads_file.stat().st_size > 0
+            
+            # If there are failed uploads, pause and ask user to retry
+            if failed_uploads_exist:
+                self._paused_for_retries = True
+                # Set paused state in web UI if available
+                try:
+                    from web.app import migration_state
+                    migration_state['paused_for_retries'] = True
+                except ImportError:
+                    pass  # Not in web UI mode
+                
+                logger.info("")
+                logger.warning("=" * 60)
+                logger.warning("⚠️  FAILED UPLOADS DETECTED")
+                logger.warning("=" * 60)
+                logger.warning("Some files failed to upload. The downloaded zip files have been kept")
+                logger.warning("so you can retry the failed uploads.")
+                logger.warning("")
+                logger.warning("Please retry the failed uploads using the web UI or CLI:")
+                logger.warning("  - Web UI: Use the 'Retry' buttons in the Failed Uploads section")
+                logger.warning("  - CLI: python main.py --config <config> --retry-failed")
+                logger.warning("")
+                logger.warning("After retrying, you can proceed with cleanup.")
+                logger.warning("=" * 60)
+                
+                # Wait for user to proceed (for web UI, this will be handled via API)
+                proceed = self._ask_proceed_after_retries()
+                if not proceed:
+                    logger.info("Migration paused. Please retry failed uploads and then proceed.")
+                    return
+                
+                # Re-check failed uploads after retries
+                failed_uploads_exist = self.failed_uploads_file.exists() and self.failed_uploads_file.stat().st_size > 0
+                if failed_uploads_exist:
+                    logger.warning("⚠️  Some files still failed after retries. Proceeding with cleanup anyway.")
+            
+            # Final cleanup (will be done after pause if there are failed uploads)
+            self._do_final_cleanup()
+            
+            # Check for corrupted zips
             corrupted_zips_exist = self.corrupted_zips_file.exists() and self.corrupted_zips_file.stat().st_size > 0
             
             logger.info("=" * 60)
