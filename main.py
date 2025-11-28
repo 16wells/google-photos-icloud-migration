@@ -1,7 +1,21 @@
+# Workaround for Python 3.9 compatibility with dependencies that use importlib.metadata.packages_distributions
+# This attribute was added in Python 3.10, so we need to handle it gracefully on Python 3.9
+import sys
+if sys.version_info < (3, 10):
+    try:
+        import importlib.metadata
+        if not hasattr(importlib.metadata, 'packages_distributions'):
+            # Add a dummy function to prevent AttributeError
+            def _packages_distributions():
+                """Compatibility shim for Python < 3.10"""
+                return {}
+            importlib.metadata.packages_distributions = _packages_distributions
+    except (ImportError, AttributeError):
+        pass
+
 import argparse
 import json
 import logging
-import sys
 import zipfile
 from pathlib import Path
 from typing import Dict, List, Optional
