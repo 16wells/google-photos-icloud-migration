@@ -111,6 +111,9 @@ class MigrationOrchestrator:
         # Corrupted zip files tracking
         self.corrupted_zips_file = self.base_dir / 'corrupted_zips.json'
         
+        # Upload tracking to prevent duplicate uploads
+        self.upload_tracking_file = self.base_dir / 'uploaded_files.json'
+        
         # Verification failure handling
         self.ignore_all_verification_failures = False
         
@@ -410,12 +413,27 @@ class MigrationOrchestrator:
         """
         icloud_config = self.config['icloud']
         
+        # Ask user if this is a new migration or continuing
+        is_continuing = self._ask_migration_type()
+        
+        # If new migration, clear the upload tracking file
+        if not is_continuing and self.upload_tracking_file.exists():
+            try:
+                self.upload_tracking_file.unlink()
+                logger.info(f"✓ Cleared upload tracking file: {self.upload_tracking_file}")
+            except Exception as e:
+                logger.warning(f"Could not clear upload tracking file: {e}")
+        
+        # Always use tracking file (it will be empty if we just cleared it for new migration)
         if use_sync_method:
             # Get photos library path from config if specified
             photos_library_path = icloud_config.get('photos_library_path')
             if photos_library_path:
                 photos_library_path = Path(photos_library_path).expanduser()
-            self.icloud_uploader = iCloudPhotosSyncUploader(photos_library_path=photos_library_path)
+            self.icloud_uploader = iCloudPhotosSyncUploader(
+                photos_library_path=photos_library_path,
+                upload_tracking_file=self.upload_tracking_file
+            )
         else:
             password = icloud_config.get('password', '').strip() if icloud_config.get('password') else ''
             # Prompt for password if empty
@@ -434,7 +452,8 @@ class MigrationOrchestrator:
                 apple_id=apple_id,
                 password=password,
                 trusted_device_id=icloud_config.get('trusted_device_id'),
-                two_fa_code=icloud_config.get('two_fa_code')  # Support 2FA code from config or env var
+                two_fa_code=icloud_config.get('two_fa_code'),  # Support 2FA code from config or env var
+                upload_tracking_file=self.upload_tracking_file
             )
     
     def upload_to_icloud(self, media_json_pairs: Dict[Path, Optional[Path]],
@@ -507,6 +526,68 @@ class MigrationOrchestrator:
             logger.warning("=" * 60)
         
         return results
+    
+    def _ask_migration_type(self) -> bool:
+        """
+        Ask user if this is a new migration or continuing an existing one.
+        
+        Returns:
+            True if continuing existing migration (keep tracking), False if new migration (clear tracking)
+        """
+        # Check if we're in a non-interactive environment
+        import sys
+        is_interactive = sys.stdin.isatty()
+        
+        if not is_interactive:
+            # In non-interactive mode, check if tracking file exists
+            # If it exists, assume continuing; if not, assume new
+            if self.upload_tracking_file.exists():
+                logger.info("Non-interactive mode: Found existing upload tracking file, continuing existing migration")
+                return True
+            else:
+                logger.info("Non-interactive mode: No upload tracking file found, starting new migration")
+                return False
+        
+        # Check if tracking file exists
+        tracking_exists = self.upload_tracking_file.exists()
+        
+        if tracking_exists:
+            logger.info("")
+            logger.info("=" * 60)
+            logger.info("UPLOAD TRACKING FILE FOUND")
+            logger.info("=" * 60)
+            logger.info(f"Found existing upload tracking file: {self.upload_tracking_file}")
+            logger.info("This file tracks which photos/videos have already been uploaded.")
+            logger.info("")
+            logger.info("Is this:")
+            logger.info("  (N) New Migration - Start fresh, clear upload history")
+            logger.info("  (C) Continue Migration - Keep existing upload history (skip already-uploaded files)")
+            logger.info("")
+            
+            while True:
+                try:
+                    choice = input("Enter your choice (N/C): ").strip().upper()
+                    if choice == 'N':
+                        logger.info("Starting new migration - clearing upload tracking...")
+                        return False
+                    elif choice == 'C':
+                        logger.info("Continuing existing migration - keeping upload tracking...")
+                        return True
+                    else:
+                        logger.warning("Invalid choice. Please enter N (New Migration) or C (Continue Migration).")
+                except (EOFError, KeyboardInterrupt) as e:
+                    logger.warning("")
+                    logger.warning("Input interrupted. Defaulting to continue existing migration.")
+                    return True
+        else:
+            logger.info("")
+            logger.info("=" * 60)
+            logger.info("NEW MIGRATION DETECTED")
+            logger.info("=" * 60)
+            logger.info("No upload tracking file found. This appears to be a new migration.")
+            logger.info("Upload tracking will be created to prevent duplicate uploads.")
+            logger.info("")
+            return False
     
     def _ask_continue_after_zip(self, processed_count: int, total_zips: int) -> bool:
         """

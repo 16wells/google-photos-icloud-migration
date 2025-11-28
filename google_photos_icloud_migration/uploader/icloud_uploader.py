@@ -1,6 +1,8 @@
 """
 Upload media files to iCloud Photos using pyicloud library.
 """
+import json
+import hashlib
 import logging
 import os
 import time
@@ -18,7 +20,8 @@ class iCloudUploader:
     
     def __init__(self, apple_id: str, password: str, 
                  trusted_device_id: Optional[str] = None,
-                 two_fa_code: Optional[str] = None):
+                 two_fa_code: Optional[str] = None,
+                 upload_tracking_file: Optional[Path] = None):
         """
         Initialize the iCloud uploader.
         
@@ -28,6 +31,7 @@ class iCloudUploader:
             trusted_device_id: Optional trusted device ID for 2FA
             two_fa_code: Optional 2FA verification code (for non-interactive use)
                          Can also be set via ICLOUD_2FA_CODE environment variable
+            upload_tracking_file: Optional path to JSON file for tracking uploaded files
         """
         self.apple_id = apple_id
         # Strip password but preserve it - don't convert empty string to None
@@ -43,6 +47,10 @@ class iCloudUploader:
         self.api = None
         self._existing_albums_cache: Optional[Dict[str, any]] = None
         self._albums_cache_timestamp: Optional[float] = None
+        
+        # Upload tracking to prevent duplicate uploads
+        self.upload_tracking_file = upload_tracking_file
+        self._uploaded_files_cache: Optional[Dict[str, dict]] = None
         
         # Prompt for password if empty
         if not self.password:
@@ -1327,6 +1335,130 @@ class iCloudUploader:
             logger.debug(f"Failed to create album {album_name}: {e}")
             return False
     
+    def _get_file_identifier(self, file_path: Path) -> str:
+        """
+        Generate a unique identifier for a file based on its path, size, and modification time.
+        
+        Args:
+            file_path: Path to the file
+            
+        Returns:
+            String identifier for the file
+        """
+        try:
+            stat = file_path.stat()
+            # Use absolute path, size, and mtime to create unique identifier
+            identifier = f"{file_path.absolute()}:{stat.st_size}:{stat.st_mtime}"
+            # Create a hash for shorter storage
+            return hashlib.md5(identifier.encode()).hexdigest()
+        except Exception as e:
+            logger.debug(f"Error generating file identifier for {file_path}: {e}")
+            # Fallback to just the absolute path
+            return str(file_path.absolute())
+    
+    def _load_uploaded_files(self) -> Dict[str, dict]:
+        """
+        Load the set of already uploaded files from the tracking file.
+        
+        Returns:
+            Dictionary mapping file identifiers to upload metadata
+        """
+        if self._uploaded_files_cache is not None:
+            return self._uploaded_files_cache
+        
+        if not self.upload_tracking_file or not self.upload_tracking_file.exists():
+            self._uploaded_files_cache = {}
+            return self._uploaded_files_cache
+        
+        try:
+            with open(self.upload_tracking_file, 'r') as f:
+                data = json.load(f)
+                self._uploaded_files_cache = data if isinstance(data, dict) else {}
+                logger.debug(f"Loaded {len(self._uploaded_files_cache)} previously uploaded files from tracking file")
+                return self._uploaded_files_cache
+        except (json.JSONDecodeError, IOError) as e:
+            logger.warning(f"Could not load upload tracking file: {e}")
+            self._uploaded_files_cache = {}
+            return self._uploaded_files_cache
+    
+    def _save_uploaded_file(self, file_path: Path, album_name: Optional[str] = None):
+        """
+        Record that a file was successfully uploaded.
+        
+        Args:
+            file_path: Path to the uploaded file
+            album_name: Optional album name the file was uploaded to
+        """
+        if not self.upload_tracking_file:
+            return
+        
+        try:
+            # Load existing data
+            uploaded_files = self._load_uploaded_files()
+            
+            # Generate identifier
+            file_id = self._get_file_identifier(file_path)
+            
+            # Record upload
+            uploaded_files[file_id] = {
+                'file_path': str(file_path.absolute()),
+                'file_name': file_path.name,
+                'file_size': file_path.stat().st_size if file_path.exists() else 0,
+                'album_name': album_name,
+                'uploaded_at': time.time()
+            }
+            
+            # Save to file
+            self.upload_tracking_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.upload_tracking_file, 'w') as f:
+                json.dump(uploaded_files, f, indent=2)
+            
+            # Update cache
+            self._uploaded_files_cache = uploaded_files
+            
+        except Exception as e:
+            logger.warning(f"Could not save upload tracking for {file_path.name}: {e}")
+    
+    def _is_file_already_uploaded(self, file_path: Path) -> bool:
+        """
+        Check if a file was already successfully uploaded.
+        
+        Args:
+            file_path: Path to the file to check
+            
+        Returns:
+            True if file was already uploaded, False otherwise
+        """
+        if not self.upload_tracking_file:
+            return False
+        
+        try:
+            uploaded_files = self._load_uploaded_files()
+            file_id = self._get_file_identifier(file_path)
+            
+            if file_id in uploaded_files:
+                # File identifier matches - it's the same file
+                record = uploaded_files[file_id]
+                if file_path.exists():
+                    stat = file_path.stat()
+                    # Verify file size matches (additional safety check)
+                    if stat.st_size == record.get('file_size', 0):
+                        logger.debug(f"File {file_path.name} was already uploaded (found in tracking file)")
+                        return True
+                    else:
+                        # File size changed - might be a different file, don't skip
+                        logger.debug(f"File {file_path.name} size changed, re-uploading")
+                        return False
+                else:
+                    # File doesn't exist anymore, but was uploaded - still consider it uploaded
+                    logger.debug(f"File {file_path.name} was already uploaded (file no longer exists locally)")
+                    return True
+            
+            return False
+        except Exception as e:
+            logger.debug(f"Error checking if file was uploaded: {e}")
+            return False
+    
     def upload_photo(self, photo_path: Path, album: Optional[any] = None, album_name: Optional[str] = None) -> bool:
         """
         Upload a single photo to iCloud Photos.
@@ -1343,6 +1475,11 @@ class iCloudUploader:
             if not photo_path.exists():
                 logger.error(f"File does not exist: {photo_path}")
                 return False
+            
+            # Check if file was already uploaded
+            if self._is_file_already_uploaded(photo_path):
+                logger.info(f"⏭️  Skipping {photo_path.name} - already uploaded in previous run")
+                return True
             
             # Access Photos service
             if not hasattr(self.api, 'photos') or self.api.photos is None:
@@ -1374,6 +1511,7 @@ class iCloudUploader:
                             logger.debug(f"Error uploading via album.upload(): {e}")
                         if result:
                             logger.debug(f"✓ Successfully uploaded {photo_path.name} to album")
+                            self._save_uploaded_file(photo_path, album_name)
                             return True
                         else:
                             logger.warning(f"Album upload returned False for {photo_path.name}")
@@ -1389,6 +1527,7 @@ class iCloudUploader:
                                 result = album.add(f)
                         if result:
                             logger.debug(f"✓ Successfully uploaded {photo_path.name} to album")
+                            self._save_uploaded_file(photo_path, album_name)
                             return True
                 except Exception as e:
                     logger.debug(f"Error uploading via album object: {e}")
@@ -1429,6 +1568,7 @@ class iCloudUploader:
                                 
                                 if result:
                                     logger.debug(f"✓ Successfully uploaded {photo_path.name} to album '{album_name}'")
+                                    self._save_uploaded_file(photo_path, album_name)
                                     return True
                             # Try album.add() method
                             elif hasattr(album, 'add') and callable(album.add):
@@ -1441,6 +1581,7 @@ class iCloudUploader:
                                 
                                 if result:
                                     logger.debug(f"✓ Successfully uploaded {photo_path.name} to album '{album_name}'")
+                                    self._save_uploaded_file(photo_path, album_name)
                                     return True
                 except Exception as e:
                     logger.debug(f"Error getting/uploading to album by name: {e}")
@@ -1467,6 +1608,7 @@ class iCloudUploader:
                                         logger.debug(f"Added {photo_path.name} to album '{album_name}'")
                             except Exception as e:
                                 logger.debug(f"Could not add photo to album after upload (non-fatal): {e}")
+                        self._save_uploaded_file(photo_path, album_name)
                         return True
                     else:
                         logger.warning(f"Photos.upload() returned False for {photo_path.name}")
@@ -1524,6 +1666,7 @@ class iCloudUploader:
                             logger.warning(f"✓ Uploaded {photo_path.name} to iCloud Drive{album_name and f' (album: {album_name})' or ''}")
                             logger.warning("  NOTE: Files in Drive won't appear in Photos automatically.")
                             logger.warning("  You'll need to import them manually from iCloud Drive to Photos.")
+                            self._save_uploaded_file(photo_path, album_name)
                             return True
             except Exception as e:
                 logger.debug(f"Error trying iCloud Drive upload: {e}")
@@ -1685,13 +1828,18 @@ class iCloudPhotosSyncUploader:
     sync to iCloud Photos if iCloud Photos is enabled in System Settings.
     """
     
-    def __init__(self, photos_library_path: Optional[Path] = None):
+    def __init__(self, photos_library_path: Optional[Path] = None,
+                 upload_tracking_file: Optional[Path] = None):
         """
         Initialize the PhotoKit-based uploader.
         
         Args:
             photos_library_path: Path to Photos library (optional, not used with PhotoKit)
+            upload_tracking_file: Optional path to JSON file for tracking uploaded files
         """
+        # Upload tracking to prevent duplicate uploads
+        self.upload_tracking_file = upload_tracking_file
+        self._uploaded_files_cache: Optional[Dict[str, dict]] = None
         # Check if we're on macOS
         import platform
         if platform.system() != 'Darwin':
@@ -1924,6 +2072,90 @@ class iCloudPhotosSyncUploader:
             logger.debug(traceback.format_exc())
             return None
     
+    def _get_file_identifier(self, file_path: Path) -> str:
+        """Generate a unique identifier for a file (same as iCloudUploader)."""
+        try:
+            stat = file_path.stat()
+            identifier = f"{file_path.absolute()}:{stat.st_size}:{stat.st_mtime}"
+            return hashlib.md5(identifier.encode()).hexdigest()
+        except Exception as e:
+            logger.debug(f"Error generating file identifier for {file_path}: {e}")
+            return str(file_path.absolute())
+    
+    def _load_uploaded_files(self) -> Dict[str, dict]:
+        """Load the set of already uploaded files from the tracking file (same as iCloudUploader)."""
+        if self._uploaded_files_cache is not None:
+            return self._uploaded_files_cache
+        
+        if not self.upload_tracking_file or not self.upload_tracking_file.exists():
+            self._uploaded_files_cache = {}
+            return self._uploaded_files_cache
+        
+        try:
+            with open(self.upload_tracking_file, 'r') as f:
+                data = json.load(f)
+                self._uploaded_files_cache = data if isinstance(data, dict) else {}
+                logger.debug(f"Loaded {len(self._uploaded_files_cache)} previously uploaded files from tracking file")
+                return self._uploaded_files_cache
+        except (json.JSONDecodeError, IOError) as e:
+            logger.warning(f"Could not load upload tracking file: {e}")
+            self._uploaded_files_cache = {}
+            return self._uploaded_files_cache
+    
+    def _save_uploaded_file(self, file_path: Path, album_name: Optional[str] = None):
+        """Record that a file was successfully uploaded (same as iCloudUploader)."""
+        if not self.upload_tracking_file:
+            return
+        
+        try:
+            uploaded_files = self._load_uploaded_files()
+            file_id = self._get_file_identifier(file_path)
+            uploaded_files[file_id] = {
+                'file_path': str(file_path.absolute()),
+                'file_name': file_path.name,
+                'file_size': file_path.stat().st_size if file_path.exists() else 0,
+                'album_name': album_name,
+                'uploaded_at': time.time()
+            }
+            self.upload_tracking_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.upload_tracking_file, 'w') as f:
+                json.dump(uploaded_files, f, indent=2)
+            self._uploaded_files_cache = uploaded_files
+        except Exception as e:
+            logger.warning(f"Could not save upload tracking for {file_path.name}: {e}")
+    
+    def _is_file_already_uploaded(self, file_path: Path) -> bool:
+        """Check if a file was already successfully uploaded (same as iCloudUploader)."""
+        if not self.upload_tracking_file:
+            return False
+        
+        try:
+            uploaded_files = self._load_uploaded_files()
+            file_id = self._get_file_identifier(file_path)
+            
+            if file_id in uploaded_files:
+                # File identifier matches - it's the same file
+                record = uploaded_files[file_id]
+                if file_path.exists():
+                    stat = file_path.stat()
+                    # Verify file size matches (additional safety check)
+                    if stat.st_size == record.get('file_size', 0):
+                        logger.debug(f"File {file_path.name} was already uploaded (found in tracking file)")
+                        return True
+                    else:
+                        # File size changed - might be a different file, don't skip
+                        logger.debug(f"File {file_path.name} size changed, re-uploading")
+                        return False
+                else:
+                    # File doesn't exist anymore, but was uploaded - still consider it uploaded
+                    logger.debug(f"File {file_path.name} was already uploaded (file no longer exists locally)")
+                    return True
+            
+            return False
+        except Exception as e:
+            logger.debug(f"Error checking if file was uploaded: {e}")
+            return False
+    
     def upload_file(self, file_path: Path, album_name: Optional[str] = None) -> bool:
         """
         Save file to Photos library using PhotoKit.
@@ -1943,6 +2175,11 @@ class iCloudPhotosSyncUploader:
             if not file_path.exists():
                 logger.error(f"File does not exist: {file_path}")
                 return False
+            
+            # Check if file was already uploaded
+            if self._is_file_already_uploaded(file_path):
+                logger.info(f"⏭️  Skipping {file_path.name} - already uploaded in previous run")
+                return True
             
             # Check permission
             auth_status = self.PHPhotoLibrary.authorizationStatus()
@@ -2030,6 +2267,7 @@ class iCloudPhotosSyncUploader:
                     logger.debug(f"Saved {file_path.name} to Photos library and added to album '{album_name}'")
                 else:
                     logger.debug(f"Saved {file_path.name} to Photos library")
+                self._save_uploaded_file(file_path, album_name)
                 return True
             else:
                 logger.error(f"Failed to save {file_path.name}: Unknown error")
