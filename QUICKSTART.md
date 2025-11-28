@@ -29,12 +29,21 @@ cp config.yaml.example config.yaml
 # Edit config.yaml with your settings
 ```
 
-3. **Run with PhotoKit sync method (Recommended):**
-```bash
-python3 main.py --config config.yaml --use-sync
-```
+3. **Choose your interface:**
 
-This uses Apple's PhotoKit framework to save photos directly to your Photos library, which then syncs to iCloud Photos automatically.
+   **Option A: Web UI (Recommended - Modern interface with real-time progress)**
+   ```bash
+   python3 web_server.py
+   ```
+   Then open `http://localhost:5001` in your browser.
+   
+   See [WEB_UI.md](WEB_UI.md) for detailed web UI documentation.
+   
+   **Option B: Command Line**
+   ```bash
+   python3 main.py --config config.yaml --use-sync
+   ```
+   This uses Apple's PhotoKit framework to save photos directly to your Photos library, which then syncs to iCloud Photos automatically.
 
 ## Configuration Essentials
 
@@ -84,6 +93,7 @@ processing:
 ## Next Steps
 
 - Read **README.md** for detailed documentation
+- Read **WEB_UI.md** for comprehensive web interface guide
 - Read **COMPLETE_INSTALLATION_GUIDE.md** for step-by-step setup on a new MacBook
 - Read **AUTHENTICATION_GUIDE.md** for authentication details
 - Read **TESTING.md** to test before full migration

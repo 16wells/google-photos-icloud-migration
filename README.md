@@ -73,10 +73,12 @@ Edit `config.yaml` with your settings:
 Start the modern web interface for an intuitive, visual migration experience:
 
 ```bash
-python web_server.py
+python3 web_server.py
 ```
 
-Then open your browser to `http://localhost:5000`
+Then open your browser to `http://localhost:5001`
+
+> **Note:** The web UI provides real-time progress tracking, live statistics, and activity logs - perfect for monitoring long-running migrations.
 
 See [WEB_UI.md](WEB_UI.md) for detailed web UI documentation.
 

@@ -33,11 +33,17 @@ python web_server.py
 
 2. **Open your browser:**
 
-Navigate to `http://localhost:5000` in your web browser.
+Navigate to `http://localhost:5001` in your web browser.
+
+> **Note:** Port 5001 is used instead of 5000 because macOS often uses port 5000 for AirPlay Receiver.
 
 The web UI will automatically connect and display the current migration status.
 
 ## Using the Web UI
+
+![Web UI Dashboard](docs/images/web-ui-dashboard.png)
+
+*Main dashboard showing the migration interface*
 
 ### Dashboard Overview
 
@@ -69,6 +75,10 @@ The main dashboard shows:
 
 ### Monitoring Progress
 
+![Migration in Progress](docs/images/web-ui-running.png)
+
+*Real-time progress tracking during migration*
+
 - **Progress Bar**: Shows overall progress percentage
 - **Activity Log**: Real-time log messages appear in the Activity Log panel
 - **Statistics**: Update automatically as the migration progresses
@@ -79,6 +89,10 @@ The main dashboard shows:
 - The migration will complete the current operation before stopping
 
 ### Viewing Failed Uploads
+
+![Failed Uploads View](docs/images/web-ui-failed-uploads.png)
+
+*Failed uploads list showing files that need retry*
 
 - Click "View Failed Uploads" in the Quick Actions panel
 - Failed uploads are displayed with file names, album information, and retry counts
@@ -126,8 +140,9 @@ The web UI allows you to:
 
 ### Web Server Won't Start
 
-- Ensure all dependencies are installed: `pip install -r requirements.txt`
-- Check if port 5000 is already in use
+- Ensure all dependencies are installed: `pip3 install -r requirements.txt`
+- Use `pip3` instead of `pip` on macOS
+- Check if port 5001 is already in use (try a different port if needed)
 - Verify Python version is 3.9 or higher
 
 ### No Progress Updates
@@ -153,7 +168,7 @@ The web UI works best in modern browsers:
 
 ## Security Notes
 
-- The web server runs on `0.0.0.0:5000` by default, making it accessible from any network interface
+- The web server runs on `127.0.0.1:5001` by default, making it accessible only from localhost
 - For production use, consider:
   - Adding authentication
   - Using HTTPS
