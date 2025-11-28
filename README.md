@@ -15,7 +15,7 @@ A macOS tool to migrate photos and videos from Google Photos (exported via Googl
 
 ### Prerequisites
 - **macOS** (required for PhotoKit framework)
-- Python 3.8+
+- Python 3.11+
 - ExifTool (install via `brew install exiftool`)
 - Google Drive API credentials
 - `pyobjc-framework-Photos` (installed automatically via requirements.txt)

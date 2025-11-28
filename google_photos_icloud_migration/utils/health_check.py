@@ -65,9 +65,9 @@ class HealthChecker:
         return all_passed, self.results
     
     def check_python_version(self) -> None:
-        """Check Python version is 3.8+."""
+        """Check Python version is 3.11+."""
         version = sys.version_info
-        if version.major >= 3 and version.minor >= 8:
+        if version.major >= 3 and version.minor >= 11:
             self.results.append(HealthCheckResult(
                 "Python Version",
                 True,
@@ -78,7 +78,7 @@ class HealthChecker:
                 "Python Version",
                 False,
                 f"Python {version.major}.{version.minor}.{version.micro} detected. "
-                f"Python 3.8+ required."
+                f"Python 3.11+ required."
             ))
     
     def check_dependencies(self) -> None:

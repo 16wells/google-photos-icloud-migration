@@ -3,7 +3,7 @@
 Web server launcher for Google Photos to iCloud Photos Migration Tool.
 Run this script to start the web UI.
 """
-# Workaround for Python 3.9 compatibility with dependencies that use importlib.metadata.packages_distributions
+# Workaround for Python < 3.10 compatibility with dependencies that use importlib.metadata.packages_distributions
 import sys
 if sys.version_info < (3, 10):
     try:

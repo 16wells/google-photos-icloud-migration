@@ -4,7 +4,7 @@ Get started with the Google Photos to iCloud migration in 5 minutes.
 
 ## Prerequisites Checklist
 
-- [ ] Python 3.8+ installed
+- [ ] Python 3.11+ installed
 - [ ] ExifTool installed (`brew install exiftool` on macOS)
 - [ ] Google Drive API credentials (`credentials.json`)
 - [ ] Apple ID credentials

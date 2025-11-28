@@ -447,7 +447,7 @@ Let's make sure everything is set up correctly.
 # Make sure virtual environment is activated
 source venv/bin/activate
 
-# Check Python version (should be 3.8+)
+# Check Python version (should be 3.11+)
 python3 --version
 
 # Check that packages are installed

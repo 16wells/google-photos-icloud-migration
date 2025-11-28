@@ -172,7 +172,7 @@ The web UI allows you to:
 - Ensure all dependencies are installed: `pip3 install -r requirements.txt`
 - Use `pip3` instead of `pip` on macOS
 - Check if port 5001 is already in use (try a different port if needed)
-- Verify Python version is 3.9 or higher
+- Verify Python version is 3.11 or higher
 
 ### No Progress Updates
 

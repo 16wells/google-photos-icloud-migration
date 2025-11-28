@@ -1,5 +1,5 @@
-# Workaround for Python 3.9 compatibility with dependencies that use importlib.metadata.packages_distributions
-# This attribute was added in Python 3.10, so we need to handle it gracefully on Python 3.9
+# Workaround for Python < 3.10 compatibility with dependencies that use importlib.metadata.packages_distributions
+# This attribute was added in Python 3.10, so we need to handle it gracefully on older Python versions
 import sys
 if sys.version_info < (3, 10):
     try:

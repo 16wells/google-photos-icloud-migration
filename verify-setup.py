@@ -13,8 +13,8 @@ def check_python():
     """Check Python version."""
     version = sys.version_info
     print(f"Python version: {version.major}.{version.minor}.{version.micro}")
-    if version.major < 3 or (version.major == 3 and version.minor < 8):
-        print("  ⚠️  Warning: Python 3.8+ recommended")
+    if version.major < 3 or (version.major == 3 and version.minor < 11):
+        print("  ⚠️  Warning: Python 3.11+ recommended")
         return False
     return True
 
