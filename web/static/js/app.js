@@ -96,6 +96,116 @@ socket.on('log_message', (data) => {
     addLog(data.level.toLowerCase(), data.message);
 });
 
+// Terminal emulator setup
+let terminal = null;
+let terminalContainer = null;
+let fitAddon = null;
+
+function initializeTerminal() {
+    terminalContainer = document.getElementById('terminal');
+    if (!terminalContainer) return;
+    
+    // Check if Terminal class is available (xterm.js loaded)
+    if (typeof Terminal === 'undefined') {
+        console.warn('xterm.js not loaded, terminal emulator unavailable');
+        return;
+    }
+    
+    // Initialize xterm.js
+    terminal = new Terminal({
+        theme: {
+            background: '#000000',
+            foreground: '#ffffff',
+            cursor: '#ffffff',
+            selection: 'rgba(255, 255, 255, 0.3)',
+            black: '#000000',
+            red: '#ff0000',
+            green: '#00ff00',
+            yellow: '#ffff00',
+            blue: '#0000ff',
+            magenta: '#ff00ff',
+            cyan: '#00ffff',
+            white: '#ffffff',
+            brightBlack: '#808080',
+            brightRed: '#ff8080',
+            brightGreen: '#80ff80',
+            brightYellow: '#ffff80',
+            brightBlue: '#8080ff',
+            brightMagenta: '#ff80ff',
+            brightCyan: '#80ffff',
+            brightWhite: '#ffffff'
+        },
+        fontSize: 12,
+        fontFamily: 'Monaco, Menlo, "Ubuntu Mono", Consolas, "Courier New", monospace',
+        cursorBlink: true,
+        cursorStyle: 'block',
+        scrollback: 10000, // Keep 10k lines of history
+        allowTransparency: false,
+        convertEol: true
+    });
+    
+    // Add fit addon for auto-resize
+    if (typeof FitAddon !== 'undefined') {
+        fitAddon = new FitAddon.FitAddon();
+        terminal.loadAddon(fitAddon);
+    }
+    
+    terminal.open(terminalContainer);
+    
+    // Fit terminal to container
+    if (fitAddon) {
+        fitAddon.fit();
+        // Re-fit on window resize
+        window.addEventListener('resize', () => {
+            if (fitAddon && terminalContainer && terminalContainer.style.display !== 'none') {
+                fitAddon.fit();
+            }
+        });
+    }
+    
+    // Welcome message
+    terminal.writeln('\x1b[32mTerminal output will appear here...\x1b[0m');
+    terminal.writeln('This shows the same detailed progress as the terminal version.');
+    terminal.writeln('Progress bars, colors, and all output are preserved.\x1b[0m');
+    terminal.writeln('');
+}
+
+// Listen for terminal output from WebSocket
+socket.on('terminal_output', (data) => {
+    if (terminal && data.data) {
+        // Write data to terminal (xterm.js handles ANSI codes automatically)
+        terminal.write(data.data);
+    }
+});
+
+// Toggle terminal visibility
+function toggleTerminal() {
+    const container = document.getElementById('terminal-container');
+    const toggleBtn = document.getElementById('terminal-toggle-text');
+    
+    if (!container || !toggleBtn) return;
+    
+    if (container.style.display === 'none') {
+        container.style.display = 'block';
+        toggleBtn.textContent = 'Collapse';
+        // Re-fit terminal when shown
+        if (fitAddon) {
+            setTimeout(() => fitAddon.fit(), 100);
+        }
+    } else {
+        container.style.display = 'none';
+        toggleBtn.textContent = 'Expand';
+    }
+}
+
+// Clear terminal
+function clearTerminal() {
+    if (terminal) {
+        terminal.clear();
+        terminal.writeln('\x1b[32mTerminal cleared.\x1b[0m');
+    }
+}
+
 // Corrupted zip file handling
 let corruptedZipData = null;
 
@@ -817,6 +927,9 @@ document.addEventListener('DOMContentLoaded', () => {
     loadFailedUploads();
     checkServerStatus();
     checkDiskSpace();
+    
+    // Initialize terminal emulator
+    initializeTerminal();
     
     // Auto-refresh statistics every 5 seconds
     setInterval(() => {

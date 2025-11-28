@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import sys
 import threading
 import time
 from pathlib import Path
@@ -82,6 +83,45 @@ def emit_status_update():
     })
 
 
+class TerminalStreamCapture:
+    """Captures stdout/stderr and streams to WebSocket clients."""
+    
+    def __init__(self, original_stream, stream_name='stdout'):
+        self.original_stream = original_stream
+        self.stream_name = stream_name
+        self.lock = threading.Lock()
+    
+    def write(self, data):
+        """Write to original stream and emit via WebSocket."""
+        # Write to original stream (so it still appears in console)
+        with self.lock:
+            self.original_stream.write(data)
+            self.original_stream.flush()
+            
+            # Emit to WebSocket clients
+            try:
+                socketio.emit('terminal_output', {
+                    'data': data,
+                    'stream': self.stream_name,
+                    'timestamp': time.time()
+                })
+            except Exception:
+                pass  # Don't break if WebSocket fails
+    
+    def flush(self):
+        """Flush the original stream."""
+        self.original_stream.flush()
+    
+    def isatty(self):
+        """Return True to make tqdm and other tools think this is a terminal."""
+        # This makes tqdm output progress bars with ANSI codes
+        return True
+    
+    def __getattr__(self, name):
+        """Delegate other attributes to original stream."""
+        return getattr(self.original_stream, name)
+
+
 class WebProgressLogger(logging.Handler):
     """Custom logging handler that sends log messages to web clients."""
     
@@ -136,26 +176,38 @@ def update_progress_from_log(message: str):
     
     # Extract statistics from log messages
     
-    # "Found X zip files total to process"
-    zip_total_match = re.search(r'Found (\d+) zip files? (?:total to process|to process)', message)
+    # "Found X zip files total to process" or "Found X zip files total"
+    zip_total_match = re.search(r'Found (\d+) zip files? (?:total to process|total|to process)', message, re.IGNORECASE)
     if zip_total_match:
         total = int(zip_total_match.group(1))
         migration_state['statistics']['zip_files_total'] = total
         emit_progress_update()
     
     # "Found X media files in this zip" or "Found X media files to process"
-    media_found_match = re.search(r'Found (\d+) media files?', message)
+    # Note: This is cumulative - each zip adds to the total
+    media_found_match = re.search(r'Found (\d+) media files?', message, re.IGNORECASE)
     if media_found_match:
         found = int(media_found_match.group(1))
-        migration_state['statistics']['media_files_found'] = migration_state['statistics'].get('media_files_found', 0) + found
+        current_found = migration_state['statistics'].get('media_files_found', 0)
+        migration_state['statistics']['media_files_found'] = current_found + found
         emit_progress_update()
     
-    # "Identified X albums"
-    albums_match = re.search(r'Identified (\d+) albums?', message)
+    # "Identified X albums" or "Found X albums"
+    albums_match = re.search(r'(?:Identified|Found) (\d+) albums?', message, re.IGNORECASE)
     if albums_match:
         albums = int(albums_match.group(1))
         migration_state['statistics']['albums_identified'] = albums
         emit_progress_update()
+    
+    # Track uploaded files - look for "Uploaded" or "successfully uploaded"
+    uploaded_match = re.search(r'(?:Uploaded|uploaded) (\d+)(?: files?| photos?| videos?)', message, re.IGNORECASE)
+    if uploaded_match and 'successfully' in message.lower():
+        uploaded = int(uploaded_match.group(1))
+        current_uploaded = migration_state['statistics'].get('media_files_uploaded', 0)
+        # Only update if this is a new higher number (avoid double-counting)
+        if uploaded > current_uploaded:
+            migration_state['statistics']['media_files_uploaded'] = uploaded
+            emit_progress_update()
     
     # Try to extract progress information from log messages
     # Example: "Processing zip 5/10: filename.zip"
@@ -435,8 +487,9 @@ def monitor_statistics(orchestrator):
             if orchestrator and hasattr(orchestrator, 'statistics'):
                 stats = orchestrator.statistics
                 
-                # Update statistics from orchestrator (if available)
-                if hasattr(stats, 'zip_files_total') and stats.zip_files_total:
+                # Update statistics from orchestrator - always update, even if value is 0
+                # This ensures the UI shows accurate counts as they change
+                if hasattr(stats, 'zip_files_total'):
                     migration_state['statistics']['zip_files_total'] = stats.zip_files_total
                 if hasattr(stats, 'zip_files_processed_successfully'):
                     migration_state['statistics']['zip_files_processed'] = stats.zip_files_processed_successfully
@@ -508,10 +561,11 @@ def monitor_statistics(orchestrator):
                     socketio.emit('disk_space_update', disk_info)
                 monitor_statistics._last_disk_update = current_time
             
-            # Emit progress update to keep UI updated even during long operations
+            # Always emit progress update to keep UI updated, even during long operations
+            # This ensures the UI reflects current state even if statistics haven't changed
             emit_progress_update()
             
-            time.sleep(2)  # Update every 2 seconds
+            time.sleep(1)  # Update every 1 second for more responsive UI
         except Exception as e:
             logger.warning(f"Error monitoring statistics: {e}")
             time.sleep(5)  # Wait longer on error
@@ -532,7 +586,18 @@ def run_migration(config_path: str, use_sync_method: bool = False, log_level: st
         log_level: Logging level (DEBUG, INFO, WARNING, ERROR)
     """
     stats_thread = None
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+    stdout_capture = None
+    stderr_capture = None
+    
     try:
+        # Capture stdout/stderr for terminal display
+        stdout_capture = TerminalStreamCapture(original_stdout, 'stdout')
+        stderr_capture = TerminalStreamCapture(original_stderr, 'stderr')
+        sys.stdout = stdout_capture
+        sys.stderr = stderr_capture
+        
         migration_state['status'] = 'running'
         migration_state['error'] = None
         migration_state['statistics']['start_time'] = time.time()
@@ -563,13 +628,17 @@ def run_migration(config_path: str, use_sync_method: bool = False, log_level: st
         web_logger.addHandler(web_handler)
         migration_state['web_handler'] = web_handler
         
-        # Start statistics monitoring thread
+        # Start statistics monitoring thread AFTER orchestrator is created
+        # This ensures the orchestrator is available immediately for monitoring
         stats_thread = threading.Thread(
             target=monitor_statistics,
             args=(orchestrator,),
             daemon=True
         )
         stats_thread.start()
+        
+        # Give monitoring thread a moment to start before migration begins
+        time.sleep(0.5)
         
         if migration_state['stop_requested']:
             migration_state['status'] = 'stopped'
@@ -629,6 +698,12 @@ def run_migration(config_path: str, use_sync_method: bool = False, log_level: st
         migration_state['error'] = str(e)
         emit_status_update()
     finally:
+        # Restore original stdout/stderr
+        if stdout_capture:
+            sys.stdout = original_stdout
+        if stderr_capture:
+            sys.stderr = original_stderr
+        
         # Don't reset statistics when thread ends - preserve them
         # Only reset thread tracking, not the statistics
         migration_state['thread'] = None

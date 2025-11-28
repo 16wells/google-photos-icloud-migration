@@ -6,6 +6,10 @@
     <title>Google Photos to iCloud Migration</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <!-- xterm.js for terminal emulator -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
+    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
     <script>
         tailwind.config = {
             theme: {
@@ -176,6 +180,27 @@
                         <button onclick="loadConfig()" class="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors font-medium">
                             Load Configuration
                         </button>
+                    </div>
+                </div>
+
+                <!-- Terminal Output Card -->
+                <div class="bg-white rounded-lg shadow-sm p-6 border border-gray-200">
+                    <div class="flex items-center justify-between mb-4">
+                        <h2 class="text-xl font-semibold text-gray-900">Terminal Output</h2>
+                        <div class="flex items-center space-x-2">
+                            <button id="terminal-toggle" onclick="toggleTerminal()" class="px-3 py-1 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors">
+                                <span id="terminal-toggle-text">Collapse</span>
+                            </button>
+                            <button onclick="clearTerminal()" class="px-3 py-1 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors">
+                                Clear
+                            </button>
+                        </div>
+                    </div>
+                    <div id="terminal-container" class="bg-black rounded-lg p-2" style="height: 400px;">
+                        <div id="terminal" style="height: 100%;"></div>
+                    </div>
+                    <div class="mt-2 text-xs text-gray-500">
+                        <p>This shows the same detailed output you would see in the terminal, including progress bars and real-time updates.</p>
                     </div>
                 </div>
 
