@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import sys
+import time
 import zipfile
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -25,7 +26,7 @@ from google_photos_icloud_migration.processor.extractor import Extractor
 from google_photos_icloud_migration.processor.metadata_merger import MetadataMerger
 from google_photos_icloud_migration.parser.album_parser import AlbumParser
 from google_photos_icloud_migration.uploader.icloud_uploader import iCloudUploader, iCloudPhotosSyncUploader
-from google_photos_icloud_migration.exceptions import ConfigurationError
+from google_photos_icloud_migration.exceptions import ConfigurationError, ExtractionError, CorruptedZipException
 from google_photos_icloud_migration.config import MigrationConfig
 from google_photos_icloud_migration.utils.logging_config import setup_logging
 
@@ -1001,27 +1002,44 @@ class MigrationOrchestrator:
             # Extract this zip file
             try:
                 extracted_dir = self.extractor.extract_zip(zip_path)
-            except (zipfile.BadZipFile, RuntimeError) as e:
-                # Handle corrupted zip file (BadZipFile from extractor, RuntimeError from validation)
+            except ExtractionError as e:
+                # Handle corrupted zip file - raise CorruptedZipException to stop and prompt user
                 error_msg = str(e)
-                logger.error(f"❌ Corrupted zip file detected: {zip_path.name}")
-                logger.error(f"   Error: {error_msg}")
+                file_size_mb = zip_path.stat().st_size / (1024 * 1024) if zip_path.exists() else None
                 
-                # Save to corrupted zips file if we have file_info
-                if file_info:
-                    self._save_corrupted_zip(file_info, zip_path, error_msg)
-                else:
-                    # Try to create minimal file_info from zip_path
-                    minimal_info = {
+                # Create minimal file_info if not provided
+                if not file_info:
+                    file_info = {
                         'id': 'unknown',
                         'name': zip_path.name,
                         'size': str(zip_path.stat().st_size) if zip_path.exists() else '0'
                     }
-                    self._save_corrupted_zip(minimal_info, zip_path, error_msg)
                 
-                logger.warning(f"⚠️  Skipping corrupted zip file: {zip_path.name}")
-                logger.warning(f"   This file has been saved to corrupted_zips.json for later re-download")
-                return False
+                # Raise CorruptedZipException to stop processing and show modal
+                raise CorruptedZipException(
+                    error_msg,
+                    str(zip_path),
+                    file_info,
+                    file_size_mb
+                ) from e
+            except (zipfile.BadZipFile, RuntimeError) as e:
+                # Fallback for other zip errors
+                error_msg = str(e)
+                file_size_mb = zip_path.stat().st_size / (1024 * 1024) if zip_path.exists() else None
+                
+                if not file_info:
+                    file_info = {
+                        'id': 'unknown',
+                        'name': zip_path.name,
+                        'size': str(zip_path.stat().st_size) if zip_path.exists() else '0'
+                    }
+                
+                raise CorruptedZipException(
+                    error_msg,
+                    str(zip_path),
+                    file_info,
+                    file_size_mb
+                ) from e
             
             # Process metadata for this zip
             media_json_pairs = self.extractor.identify_media_json_pairs(extracted_dir)
@@ -1373,6 +1391,59 @@ class MigrationOrchestrator:
                             # Recursively call run() to restart the entire process
                             return self.run(use_sync_method=use_sync_method, retry_failed=False)
                         
+                except CorruptedZipException as e:
+                    # Corrupted zip detected - stop and emit event for web UI
+                    logger.error(f"❌ Corrupted zip file detected: {e.zip_path}")
+                    logger.error(f"   Error: {e}")
+                    
+                    # Save to corrupted zips file
+                    self._save_corrupted_zip(e.file_info, Path(e.zip_path), str(e))
+                    
+                    # Emit socket event for web UI (if available) and wait for redownload
+                    try:
+                        from web.app import socketio, migration_state
+                        socketio.emit('corrupted_zip_detected', {
+                            'zip_path': e.zip_path,
+                            'file_name': e.file_info.get('name', Path(e.zip_path).name),
+                            'file_id': e.file_info.get('id', 'unknown'),
+                            'file_size_mb': e.file_size_mb,
+                            'error_message': str(e)
+                        })
+                        # Set flag to wait for redownload
+                        migration_state['waiting_for_corrupted_zip_redownload'] = True
+                        migration_state['corrupted_zip_redownloaded'] = False
+                        
+                        # Wait for redownload (up to 1 hour)
+                        max_wait = 3600
+                        waited = 0
+                        while not migration_state.get('corrupted_zip_redownloaded', False) and waited < max_wait:
+                            time.sleep(1)
+                            waited += 1
+                            # Check stop flag
+                            if hasattr(self, '_stop_requested') and self._stop_requested:
+                                raise MigrationStoppedException("Migration stopped by user")
+                        
+                        if waited >= max_wait:
+                            logger.warning("Timeout waiting for corrupted zip redownload. Skipping file.")
+                            failed += 1
+                            continue
+                        
+                        # Reset flags
+                        migration_state['waiting_for_corrupted_zip_redownload'] = False
+                        migration_state['corrupted_zip_redownloaded'] = False
+                        
+                        # Try processing again
+                        logger.info(f"Retrying processing of {e.zip_path} after redownload...")
+                        process_result = self.process_single_zip(Path(e.zip_path), processed_count, total_zips, use_sync_method, file_info=e.file_info)
+                        if process_result:
+                            successful += 1
+                        else:
+                            failed += 1
+                        continue
+                        
+                    except (ImportError, AttributeError):
+                        # Not in web UI mode - re-raise to stop processing
+                        raise
                 except MigrationStoppedException as e:
                     logger.info("Migration stopped by user.")
                     logger.info(f"Reason: {e}")
@@ -1449,6 +1520,59 @@ class MigrationOrchestrator:
                             # Recursively call run() to restart the entire process
                             return self.run(use_sync_method=use_sync_method, retry_failed=False)
                         
+                except CorruptedZipException as e:
+                    # Corrupted zip detected - stop and emit event for web UI
+                    logger.error(f"❌ Corrupted zip file detected: {e.zip_path}")
+                    logger.error(f"   Error: {e}")
+                    
+                    # Save to corrupted zips file
+                    self._save_corrupted_zip(e.file_info, Path(e.zip_path), str(e))
+                    
+                    # Emit socket event for web UI (if available) and wait for redownload
+                    try:
+                        from web.app import socketio, migration_state
+                        socketio.emit('corrupted_zip_detected', {
+                            'zip_path': e.zip_path,
+                            'file_name': e.file_info.get('name', Path(e.zip_path).name),
+                            'file_id': e.file_info.get('id', 'unknown'),
+                            'file_size_mb': e.file_size_mb,
+                            'error_message': str(e)
+                        })
+                        # Set flag to wait for redownload
+                        migration_state['waiting_for_corrupted_zip_redownload'] = True
+                        migration_state['corrupted_zip_redownloaded'] = False
+                        
+                        # Wait for redownload (up to 1 hour)
+                        max_wait = 3600
+                        waited = 0
+                        while not migration_state.get('corrupted_zip_redownloaded', False) and waited < max_wait:
+                            time.sleep(1)
+                            waited += 1
+                            # Check stop flag
+                            if hasattr(self, '_stop_requested') and self._stop_requested:
+                                raise MigrationStoppedException("Migration stopped by user")
+                        
+                        if waited >= max_wait:
+                            logger.warning("Timeout waiting for corrupted zip redownload. Skipping file.")
+                            failed += 1
+                            continue
+                        
+                        # Reset flags
+                        migration_state['waiting_for_corrupted_zip_redownload'] = False
+                        migration_state['corrupted_zip_redownloaded'] = False
+                        
+                        # Try processing again
+                        logger.info(f"Retrying processing of {e.zip_path} after redownload...")
+                        process_result = self.process_single_zip(Path(e.zip_path), processed_count, total_zips, use_sync_method, file_info=e.file_info)
+                        if process_result:
+                            successful += 1
+                        else:
+                            failed += 1
+                        continue
+                        
+                    except (ImportError, AttributeError):
+                        # Not in web UI mode - re-raise to stop processing
+                        raise
                 except MigrationStoppedException as e:
                     logger.info("Migration stopped by user.")
                     logger.info(f"Reason: {e}")

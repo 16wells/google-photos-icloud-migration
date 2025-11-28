@@ -52,3 +52,12 @@ class AlbumError(MigrationError):
     """Error related to album operations."""
     pass
 
+
+class CorruptedZipException(MigrationError):
+    """Exception raised when a corrupted zip file is detected and requires user intervention."""
+    def __init__(self, message: str, zip_path: str, file_info: dict = None, file_size_mb: float = None):
+        super().__init__(message)
+        self.zip_path = zip_path
+        self.file_info = file_info or {}
+        self.file_size_mb = file_size_mb
+

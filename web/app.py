@@ -16,7 +16,7 @@ from flask_socketio import SocketIO, emit
 import yaml
 
 from google_photos_icloud_migration.cli.main import MigrationOrchestrator, MigrationStoppedException
-from google_photos_icloud_migration.exceptions import ConfigurationError
+from google_photos_icloud_migration.exceptions import ConfigurationError, CorruptedZipException
 
 logger = logging.getLogger(__name__)
 
@@ -38,17 +38,18 @@ migration_state = {
         'percentage': 0,
         'message': ''
     },
-    'statistics': {
-        'zip_files_total': 0,
-        'zip_files_processed': 0,
-        'media_files_found': 0,
-        'media_files_uploaded': 0,
-        'albums_identified': 0,
-        'failed_uploads': 0,
-        'corrupted_zips': 0,
-        'start_time': None,
-        'elapsed_time': 0
-    },
+            'statistics': {
+                'zip_files_total': 0,
+                'zip_files_processed': 0,
+                'media_files_found': 0,
+                'media_files_uploaded': 0,
+                'media_files_awaiting_upload': 0,
+                'albums_identified': 0,
+                'failed_uploads': 0,
+                'corrupted_zips': 0,
+                'start_time': None,
+                'elapsed_time': 0
+            },
     'error': None,
     'orchestrator': None,
     'stop_requested': False,
@@ -56,7 +57,9 @@ migration_state = {
     'log_level': 'INFO',
     'web_handler': None,
     'proceed_after_retries': False,
-    'paused_for_retries': False
+    'paused_for_retries': False,
+    'corrupted_zip_redownloaded': False,
+    'waiting_for_corrupted_zip_redownload': False
 }
 
 
@@ -168,6 +171,43 @@ class WebProgressLogger(logging.Handler):
             pass  # Don't break logging if WebSocket fails
 
 
+def get_disk_space_info(path: Path) -> Dict[str, Any]:
+    """
+    Get disk space information for a given path.
+    
+    Args:
+        path: Path to check disk space for
+        
+    Returns:
+        Dictionary with disk space information
+    """
+    try:
+        import shutil
+        stat = shutil.disk_usage(path)
+        
+        total_gb = stat.total / (1024 ** 3)
+        used_gb = (stat.total - stat.free) / (1024 ** 3)
+        free_gb = stat.free / (1024 ** 3)
+        used_percent = (used_gb / total_gb * 100) if total_gb > 0 else 0
+        free_percent = (free_gb / total_gb * 100) if total_gb > 0 else 0
+        
+        return {
+            'total_gb': round(total_gb, 2),
+            'used_gb': round(used_gb, 2),
+            'free_gb': round(free_gb, 2),
+            'used_percent': round(used_percent, 1),
+            'free_percent': round(free_percent, 1),
+            'path': str(path),
+            'status': 'low' if free_gb < 10 else 'ok' if free_gb < 50 else 'good'
+        }
+    except Exception as e:
+        logger.warning(f"Error getting disk space info: {e}")
+        return {
+            'error': str(e),
+            'status': 'error'
+        }
+
+
 def monitor_statistics(orchestrator):
     """Monitor orchestrator statistics and update state periodically."""
     while migration_state['status'] == 'running' and not migration_state['stop_requested']:
@@ -191,10 +231,23 @@ def monitor_statistics(orchestrator):
                 if hasattr(stats, 'zip_files_corrupted'):
                     migration_state['statistics']['corrupted_zips'] = stats.zip_files_corrupted
                 
+                # Calculate files awaiting upload
+                media_found = migration_state['statistics'].get('media_files_found', 0)
+                media_uploaded = migration_state['statistics'].get('media_files_uploaded', 0)
+                failed_uploads = migration_state['statistics'].get('failed_uploads', 0)
+                awaiting = max(0, media_found - media_uploaded - failed_uploads)
+                migration_state['statistics']['media_files_awaiting_upload'] = awaiting
+                
                 # Update elapsed time
                 if hasattr(stats, 'start_time') and stats.start_time:
                     elapsed = (time.time() - stats.start_time.timestamp()) if hasattr(stats.start_time, 'timestamp') else 0
                     migration_state['statistics']['elapsed_time'] = elapsed
+                
+                # Update disk space if orchestrator has base_dir
+                if hasattr(orchestrator, 'base_dir') and orchestrator.base_dir:
+                    disk_info = get_disk_space_info(orchestrator.base_dir)
+                    migration_state['statistics']['disk_space'] = disk_info
+                    socketio.emit('disk_space_update', disk_info)
                 
                 emit_progress_update()
             
@@ -288,6 +341,20 @@ def run_migration(config_path: str, use_sync_method: bool = False, log_level: st
             migration_state['statistics']['elapsed_time'] = time.time() - migration_state['statistics']['start_time']
         emit_status_update()
         
+    except CorruptedZipException as e:
+        # Corrupted zip detected - pause migration and show modal
+        migration_state['status'] = 'paused'
+        migration_state['error'] = f"Corrupted zip file detected: {e.zip_path}"
+        emit_status_update()
+        # Emit socket event for frontend modal
+        socketio.emit('corrupted_zip_detected', {
+            'zip_path': e.zip_path,
+            'file_name': e.file_info.get('name', Path(e.zip_path).name),
+            'file_id': e.file_info.get('id', 'unknown'),
+            'file_size_mb': e.file_size_mb,
+            'error_message': str(e)
+        })
+        logger.error(f"Migration paused due to corrupted zip file: {e.zip_path}")
     except MigrationStoppedException:
         migration_state['status'] = 'stopped'
         emit_status_update()
@@ -349,6 +416,14 @@ def save_config():
 @app.route('/api/status', methods=['GET'])
 def get_status():
     """Get current migration status."""
+    # Update disk space if orchestrator is available
+    disk_space_info = migration_state['statistics'].get('disk_space')
+    if not disk_space_info and migration_state.get('orchestrator'):
+        orchestrator = migration_state['orchestrator']
+        if hasattr(orchestrator, 'base_dir') and orchestrator.base_dir:
+            disk_space_info = get_disk_space_info(orchestrator.base_dir)
+            migration_state['statistics']['disk_space'] = disk_space_info
+    
     return jsonify({
         'status': migration_state['status'],
         'progress': migration_state['progress'],
@@ -357,6 +432,40 @@ def get_status():
         'log_level': migration_state.get('log_level', 'INFO'),
         'paused_for_retries': migration_state.get('paused_for_retries', False)
     })
+
+
+@app.route('/api/disk-space', methods=['GET'])
+def get_disk_space():
+    """Get disk space information."""
+    config_path = request.args.get('config_path', 'config.yaml')
+    base_dir = request.args.get('base_dir', None)
+    
+    # Try to get base_dir from config or orchestrator
+    if not base_dir:
+        if migration_state.get('orchestrator') and hasattr(migration_state['orchestrator'], 'base_dir'):
+            base_dir = str(migration_state['orchestrator'].base_dir)
+        else:
+            # Try to load from config file
+            try:
+                config_file = Path(config_path)
+                if config_file.exists():
+                    with open(config_file, 'r') as f:
+                        config = yaml.safe_load(f)
+                    base_dir = config.get('processing', {}).get('base_dir')
+            except Exception as e:
+                logger.warning(f"Could not load config to get base_dir: {e}")
+    
+    if not base_dir:
+        # Default to checking current directory
+        base_dir = '.'
+    
+    disk_info = get_disk_space_info(Path(base_dir))
+    
+    # Update migration state if orchestrator is available
+    if migration_state.get('orchestrator'):
+        migration_state['statistics']['disk_space'] = disk_info
+    
+    return jsonify(disk_info)
 
 
 @app.route('/api/migration/start', methods=['POST'])
@@ -395,6 +504,7 @@ def start_migration():
         'zip_files_processed': 0,
         'media_files_found': 0,
         'media_files_uploaded': 0,
+        'media_files_awaiting_upload': 0,
         'albums_identified': 0,
         'failed_uploads': 0,
         'corrupted_zips': 0,
@@ -765,6 +875,74 @@ def retry_single_failed_upload():
         return jsonify(result), 400
     
     return jsonify(result)
+
+
+@app.route('/api/corrupted-zip/redownload', methods=['POST'])
+def redownload_corrupted_zip():
+    """Redownload a corrupted zip file."""
+    data = request.json or {}
+    file_id = data.get('file_id')
+    file_name = data.get('file_name')
+    config_path = data.get('config_path', 'config.yaml')
+    
+    if not file_id or not file_name:
+        return jsonify({'error': 'file_id and file_name are required'}), 400
+    
+    try:
+        # Load config
+        config_file = Path(config_path)
+        if not config_file.exists():
+            return jsonify({'error': 'Configuration file not found'}), 404
+        
+        with open(config_file, 'r') as f:
+            config = yaml.safe_load(f)
+        
+        # Get orchestrator or create one
+        orchestrator = migration_state.get('orchestrator')
+        if not orchestrator:
+            orchestrator = MigrationOrchestrator(config_path)
+        
+        # Get downloader
+        downloader = orchestrator.downloader
+        
+        # Create file_info dict
+        file_info = {
+            'id': file_id,
+            'name': file_name,
+            'size': data.get('file_size', '0')
+        }
+        
+        # Get zip directory from config
+        base_dir = Path(config['processing']['base_dir'])
+        zip_dir = base_dir / config['processing'].get('zip_dir', 'zips')
+        zip_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Delete corrupted file if it exists
+        zip_path = zip_dir / file_name
+        if zip_path.exists():
+            zip_path.unlink()
+            logger.info(f"Deleted corrupted file: {zip_path}")
+        
+        # Download the file
+        logger.info(f"Redownloading corrupted zip: {file_name}")
+        downloaded_path = downloader.download_single_zip(file_info, zip_dir)
+        
+        # Signal that corrupted zip has been redownloaded
+        if migration_state.get('waiting_for_corrupted_zip_redownload', False):
+            migration_state['corrupted_zip_redownloaded'] = True
+            migration_state['status'] = 'running'
+            emit_status_update()
+            logger.info("Corrupted zip redownloaded, migration will continue")
+        
+        return jsonify({
+            'success': True,
+            'message': f'Successfully redownloaded {file_name}',
+            'file_path': str(downloaded_path)
+        })
+        
+    except Exception as e:
+        logger.exception(f"Error redownloading corrupted zip: {e}")
+        return jsonify({'error': str(e)}), 500
 
 
 @socketio.on('connect')

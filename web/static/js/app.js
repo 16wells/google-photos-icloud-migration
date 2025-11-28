@@ -32,6 +32,7 @@ const elements = {
     statZipTotal: document.getElementById('stat-zip-total'),
     statZipProcessed: document.getElementById('stat-zip-processed'),
     statMediaFound: document.getElementById('stat-media-found'),
+    statMediaAwaiting: document.getElementById('stat-media-awaiting'),
     statMediaUploaded: document.getElementById('stat-media-uploaded'),
     statAlbums: document.getElementById('stat-albums'),
     statFailed: document.getElementById('stat-failed'),
@@ -63,8 +64,45 @@ socket.on('statistics_update', (data) => {
     updateStatistics(data);
 });
 
+socket.on('disk_space_update', (data) => {
+    // Update disk space display when server emits update
+    const diskSpaceDiv = document.getElementById('disk-space');
+    if (diskSpaceDiv && data && !data.error) {
+        const statusColor = data.status === 'low' ? 'red' : data.status === 'ok' ? 'yellow' : 'green';
+        const statusIcon = data.status === 'low' ? '⚠️' : data.status === 'ok' ? '⚡' : '✓';
+        
+        diskSpaceDiv.innerHTML = `
+            <div class="space-y-2">
+                <div class="flex items-center space-x-2">
+                    <span class="w-3 h-3 bg-${statusColor}-400 rounded-full animate-pulse"></span>
+                    <span class="text-sm font-medium text-gray-900">${statusIcon} ${data.free_gb.toFixed(1)} GB Free</span>
+                </div>
+                <div class="text-xs text-gray-600 pl-5 space-y-1">
+                    <div>Total: ${data.total_gb.toFixed(1)} GB</div>
+                    <div>Used: ${data.used_gb.toFixed(1)} GB (${data.used_percent.toFixed(1)}%)</div>
+                    <div>Free: ${data.free_gb.toFixed(1)} GB (${data.free_percent.toFixed(1)}%)</div>
+                    ${data.path ? `<div class="text-gray-500 mt-2 truncate" title="${escapeHtml(data.path)}">Path: ${escapeHtml(data.path)}</div>` : ''}
+                </div>
+                ${data.status === 'low' ? `
+                    <div class="mt-2 p-2 bg-red-50 border border-red-200 rounded text-xs text-red-800">
+                        ⚠️ Low disk space! Consider freeing up space or deleting uploaded files.
+                    </div>
+                ` : ''}
+            </div>
+        `;
+    }
+});
+
 socket.on('log_message', (data) => {
     addLog(data.level.toLowerCase(), data.message);
+});
+
+// Corrupted zip file handling
+let corruptedZipData = null;
+
+socket.on('corrupted_zip_detected', (data) => {
+    corruptedZipData = data;
+    showCorruptedZipModal(data);
 });
 
 // Status management
@@ -169,6 +207,9 @@ function updateStatistics(data) {
     }
     if (data.media_files_found !== undefined) {
         elements.statMediaFound.textContent = formatNumber(data.media_files_found);
+    }
+    if (data.media_files_awaiting_upload !== undefined) {
+        elements.statMediaAwaiting.textContent = formatNumber(data.media_files_awaiting_upload);
     }
     if (data.media_files_uploaded !== undefined) {
         elements.statMediaUploaded.textContent = formatNumber(data.media_files_uploaded);
@@ -531,6 +572,58 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+// Disk space functions
+async function checkDiskSpace() {
+    const diskSpaceDiv = document.getElementById('disk-space');
+    if (!diskSpaceDiv) return;
+    
+    try {
+        const configPath = elements.configPathInput ? elements.configPathInput.value || 'config.yaml' : 'config.yaml';
+        const response = await fetch(`/api/disk-space?config_path=${encodeURIComponent(configPath)}`);
+        const data = await response.json();
+        
+        if (!response.ok || data.error) {
+            diskSpaceDiv.innerHTML = `
+                <div class="flex items-center space-x-2">
+                    <span class="w-3 h-3 bg-red-400 rounded-full"></span>
+                    <span class="text-sm text-red-700">Unable to check disk space</span>
+                </div>
+            `;
+            return;
+        }
+        
+        const statusColor = data.status === 'low' ? 'red' : data.status === 'ok' ? 'yellow' : 'green';
+        const statusIcon = data.status === 'low' ? '⚠️' : data.status === 'ok' ? '⚡' : '✓';
+        
+        diskSpaceDiv.innerHTML = `
+            <div class="space-y-2">
+                <div class="flex items-center space-x-2">
+                    <span class="w-3 h-3 bg-${statusColor}-400 rounded-full animate-pulse"></span>
+                    <span class="text-sm font-medium text-gray-900">${statusIcon} ${data.free_gb.toFixed(1)} GB Free</span>
+                </div>
+                <div class="text-xs text-gray-600 pl-5 space-y-1">
+                    <div>Total: ${data.total_gb.toFixed(1)} GB</div>
+                    <div>Used: ${data.used_gb.toFixed(1)} GB (${data.used_percent.toFixed(1)}%)</div>
+                    <div>Free: ${data.free_gb.toFixed(1)} GB (${data.free_percent.toFixed(1)}%)</div>
+                    ${data.path ? `<div class="text-gray-500 mt-2 truncate" title="${escapeHtml(data.path)}">Path: ${escapeHtml(data.path)}</div>` : ''}
+                </div>
+                ${data.status === 'low' ? `
+                    <div class="mt-2 p-2 bg-red-50 border border-red-200 rounded text-xs text-red-800">
+                        ⚠️ Low disk space! Consider freeing up space or deleting uploaded files.
+                    </div>
+                ` : ''}
+            </div>
+        `;
+    } catch (error) {
+        diskSpaceDiv.innerHTML = `
+            <div class="flex items-center space-x-2">
+                <span class="w-3 h-3 bg-yellow-400 rounded-full"></span>
+                <span class="text-sm text-yellow-700">Unable to check disk space</span>
+            </div>
+        `;
+    }
+}
+
 // Server status functions
 async function checkServerStatus() {
     const statusDiv = document.getElementById('server-status');
@@ -678,6 +771,7 @@ document.addEventListener('DOMContentLoaded', () => {
     refreshStatus();
     loadFailedUploads();
     checkServerStatus();
+    checkDiskSpace();
     
     // Auto-refresh statistics every 5 seconds
     setInterval(() => {
@@ -698,5 +792,102 @@ document.addEventListener('DOMContentLoaded', () => {
     setInterval(() => {
         checkServerStatus();
     }, 30000);
+    
+    // Auto-refresh disk space every 30 seconds
+    setInterval(() => {
+        checkDiskSpace();
+    }, 30000);
 });
+
+// Corrupted Zip Modal Functions
+function showCorruptedZipModal(data) {
+    const modal = document.getElementById('corrupted-zip-modal');
+    const zipName = document.getElementById('corrupted-zip-name');
+    const zipError = document.getElementById('corrupted-zip-error');
+    const zipSize = document.getElementById('corrupted-zip-size');
+    const loadingDiv = document.getElementById('corrupted-zip-loading');
+    const redownloadBtn = document.getElementById('corrupted-zip-redownload-btn');
+    const skipBtn = document.getElementById('corrupted-zip-skip-btn');
+    
+    // Update modal content
+    zipName.textContent = data.file_name || 'Unknown file';
+    zipError.textContent = data.error_message || 'File is corrupted or incomplete';
+    if (data.file_size_mb) {
+        zipSize.textContent = `File size: ${data.file_size_mb.toFixed(2)} MB`;
+    } else {
+        zipSize.textContent = '';
+    }
+    
+    // Reset UI state
+    loadingDiv.classList.add('hidden');
+    redownloadBtn.disabled = false;
+    skipBtn.disabled = false;
+    
+    // Show modal
+    modal.classList.remove('hidden');
+    
+    // Scroll to top
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function hideCorruptedZipModal() {
+    const modal = document.getElementById('corrupted-zip-modal');
+    modal.classList.add('hidden');
+    corruptedZipData = null;
+}
+
+async function redownloadCorruptedZip() {
+    if (!corruptedZipData) {
+        return;
+    }
+    
+    const loadingDiv = document.getElementById('corrupted-zip-loading');
+    const redownloadBtn = document.getElementById('corrupted-zip-redownload-btn');
+    const skipBtn = document.getElementById('corrupted-zip-skip-btn');
+    
+    // Show loading state
+    loadingDiv.classList.remove('hidden');
+    redownloadBtn.disabled = true;
+    skipBtn.disabled = true;
+    
+    try {
+        const response = await fetch('/api/corrupted-zip/redownload', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                file_id: corruptedZipData.file_id,
+                file_name: corruptedZipData.file_name,
+                file_size: corruptedZipData.file_size_mb ? (corruptedZipData.file_size_mb * 1024 * 1024).toString() : '0',
+                config_path: configPath,
+                use_sync_method: elements.useSyncCheckbox.checked
+            })
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            addLog('success', `Successfully redownloaded ${corruptedZipData.file_name}`);
+            hideCorruptedZipModal();
+            // Migration should automatically resume
+        } else {
+            addLog('error', `Failed to redownload: ${result.error || 'Unknown error'}`);
+            loadingDiv.classList.add('hidden');
+            redownloadBtn.disabled = false;
+            skipBtn.disabled = false;
+        }
+    } catch (error) {
+        addLog('error', `Error redownloading file: ${error.message}`);
+        loadingDiv.classList.add('hidden');
+        redownloadBtn.disabled = false;
+        skipBtn.disabled = false;
+    }
+}
+
+function skipCorruptedZip() {
+    addLog('warning', `Skipping corrupted zip file: ${corruptedZipData?.file_name || 'Unknown'}`);
+    hideCorruptedZipModal();
+    // Note: Migration will remain paused - user would need to manually continue or restart
+}
 
