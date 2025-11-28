@@ -472,19 +472,29 @@ def proceed_after_retries():
 @app.route('/api/server/status', methods=['GET'])
 def get_server_status():
     """Get web server status and health information."""
-    import psutil
     import os
     
     try:
-        # Get current process info
-        current_process = psutil.Process(os.getpid())
-        process_info = {
-            'pid': current_process.pid,
-            'status': current_process.status(),
-            'memory_mb': current_process.memory_info().rss / (1024 * 1024),
-            'cpu_percent': current_process.cpu_percent(interval=0.1),
-            'uptime_seconds': time.time() - current_process.create_time()
-        }
+        try:
+            import psutil
+            # Get current process info
+            current_process = psutil.Process(os.getpid())
+            process_info = {
+                'pid': current_process.pid,
+                'status': current_process.status(),
+                'memory_mb': current_process.memory_info().rss / (1024 * 1024),
+                'cpu_percent': current_process.cpu_percent(interval=0.1),
+                'uptime_seconds': time.time() - current_process.create_time()
+            }
+        except ImportError:
+            # psutil not available, provide basic info
+            process_info = {
+                'pid': os.getpid(),
+                'status': 'running',
+                'memory_mb': None,
+                'cpu_percent': None,
+                'uptime_seconds': None
+            }
         
         # Check if migration is running
         migration_running = migration_state['status'] == 'running'
