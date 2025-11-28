@@ -29,6 +29,9 @@ from google_photos_icloud_migration.uploader.icloud_uploader import iCloudUpload
 from google_photos_icloud_migration.exceptions import ConfigurationError, ExtractionError, CorruptedZipException
 from google_photos_icloud_migration.config import MigrationConfig
 from google_photos_icloud_migration.utils.logging_config import setup_logging
+from google_photos_icloud_migration.utils.state_manager import (
+    StateManager, FileProcessingState, ZipProcessingState
+)
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +117,9 @@ class MigrationOrchestrator:
         
         # Upload tracking to prevent duplicate uploads
         self.upload_tracking_file = self.base_dir / 'uploaded_files.json'
+        
+        # State management for granular tracking and resumption
+        self.state_manager = StateManager(self.base_dir)
         
         # Verification failure handling
         self.ignore_all_verification_failures = False
@@ -954,6 +960,231 @@ class MigrationOrchestrator:
         
         return results
     
+    def retry_failed_extractions(self) -> Dict[str, bool]:
+        """
+        Retry extracting zip files that previously failed extraction.
+        
+        Returns:
+            Dictionary mapping zip names to extraction success status
+        """
+        logger.info("=" * 60)
+        logger.info("Retrying failed extractions")
+        logger.info("=" * 60)
+        
+        failed_zips = self.state_manager.get_zips_by_state(ZipProcessingState.FAILED_EXTRACTION)
+        
+        if not failed_zips:
+            logger.info("No failed extractions to retry.")
+            return {}
+        
+        logger.info(f"Found {len(failed_zips)} zip files with failed extractions")
+        
+        zip_dir = self.base_dir / self.config['processing']['zip_dir']
+        results = {}
+        
+        for zip_name in failed_zips:
+            zip_path = zip_dir / zip_name
+            if not zip_path.exists():
+                logger.warning(f"Zip file no longer exists: {zip_name}")
+                continue
+            
+            logger.info(f"Retrying extraction: {zip_name}")
+            try:
+                extracted_dir = self.extractor.extract_zip(zip_path)
+                self.state_manager.mark_zip_extracted(zip_name, str(extracted_dir))
+                results[zip_name] = True
+                logger.info(f"✓ Successfully extracted {zip_name}")
+            except Exception as e:
+                logger.error(f"Failed to extract {zip_name}: {e}")
+                self.state_manager.mark_zip_failed(
+                    zip_name,
+                    ZipProcessingState.FAILED_EXTRACTION,
+                    str(e)
+                )
+                results[zip_name] = False
+        
+        successful = sum(1 for v in results.values() if v)
+        logger.info(f"Retried extractions: {successful}/{len(results)} succeeded")
+        
+        return results
+    
+    def retry_failed_conversions(self) -> Dict[str, bool]:
+        """
+        Retry converting files that previously failed conversion.
+        
+        Returns:
+            Dictionary mapping file paths to conversion success status
+        """
+        logger.info("=" * 60)
+        logger.info("Retrying failed conversions")
+        logger.info("=" * 60)
+        
+        failed_files = self.state_manager.get_files_by_state(FileProcessingState.FAILED_CONVERSION)
+        
+        if not failed_files:
+            logger.info("No failed conversions to retry.")
+            return {}
+        
+        logger.info(f"Found {len(failed_files)} files with failed conversions")
+        
+        # Group files by zip
+        files_by_zip: Dict[str, List[Path]] = {}
+        for file_path_str in failed_files:
+            file_path = Path(file_path_str)
+            if not file_path.exists():
+                logger.warning(f"File no longer exists: {file_path}")
+                continue
+            
+            file_state = self.state_manager._file_state.get(file_path_str, {})
+            zip_name = file_state.get('zip_name', 'unknown')
+            if zip_name not in files_by_zip:
+                files_by_zip[zip_name] = []
+            files_by_zip[zip_name].append(file_path)
+        
+        results = {}
+        processed_dir = self.base_dir / self.config['processing']['processed_dir']
+        processed_dir.mkdir(parents=True, exist_ok=True)
+        
+        for zip_name, files in files_by_zip.items():
+            logger.info(f"Retrying conversions for zip: {zip_name} ({len(files)} files)")
+            
+            # Need to find JSON metadata files for these files
+            # For now, try to find JSON files in the same directory
+            media_json_pairs = {}
+            for file_path in files:
+                json_path = file_path.with_suffix('.json')
+                if json_path.exists():
+                    media_json_pairs[file_path] = json_path
+                else:
+                    media_json_pairs[file_path] = None
+            
+            # Process metadata
+            for file_path, json_path in media_json_pairs.items():
+                try:
+                    logger.debug(f"Retrying conversion: {file_path.name}")
+                    processed_file = processed_dir / file_path.name
+                    
+                    # Copy file if needed
+                    if not processed_file.exists():
+                        import shutil
+                        shutil.copy2(file_path, processed_file)
+                    
+                    # Merge metadata
+                    self.metadata_merger.merge_metadata(processed_file, json_path)
+                    self.state_manager.mark_file_converted(str(processed_file), zip_name)
+                    results[str(file_path)] = True
+                    logger.debug(f"✓ Successfully converted {file_path.name}")
+                except Exception as e:
+                    logger.error(f"Failed to convert {file_path.name}: {e}")
+                    self.state_manager.mark_file_failed(
+                        str(file_path),
+                        zip_name,
+                        FileProcessingState.FAILED_CONVERSION,
+                        str(e)
+                    )
+                    results[str(file_path)] = False
+        
+        successful = sum(1 for v in results.values() if v)
+        logger.info(f"Retried conversions: {successful}/{len(results)} succeeded")
+        
+        return results
+    
+    def retry_failed_photos_copies(self, use_sync_method: bool = False) -> Dict[Path, bool]:
+        """
+        Retry copying files to Photos library that previously failed.
+        
+        Args:
+            use_sync_method: Whether to use Photos library sync method
+            
+        Returns:
+            Dictionary mapping file paths to copy success status
+        """
+        logger.info("=" * 60)
+        logger.info("Retrying failed Photos library copies")
+        logger.info("=" * 60)
+        
+        failed_files = self.state_manager.get_files_by_state(FileProcessingState.FAILED_PHOTOS_COPY)
+        
+        if not failed_files:
+            logger.info("No failed Photos copies to retry.")
+            return {}
+        
+        logger.info(f"Found {len(failed_files)} files with failed Photos copies")
+        
+        # Setup uploader if needed
+        if self.icloud_uploader is None:
+            self.setup_icloud_uploader(use_sync_method=use_sync_method)
+        
+        if not isinstance(self.icloud_uploader, iCloudPhotosSyncUploader):
+            logger.warning("Photos copy retry only works with sync method. Current uploader is not iCloudPhotosSyncUploader.")
+            return {}
+        
+        # Group files by album
+        files_by_album: Dict[str, List[Path]] = {}
+        file_to_album = {}
+        
+        for file_path_str in failed_files:
+            file_path = Path(file_path_str)
+            if not file_path.exists():
+                logger.warning(f"File no longer exists: {file_path}")
+                continue
+            
+            file_state = self.state_manager._file_state.get(file_path_str, {})
+            album_name = file_state.get('album', '')
+            file_to_album[file_path] = album_name
+            
+            if album_name not in files_by_album:
+                files_by_album[album_name] = []
+            files_by_album[album_name].append(file_path)
+        
+        # Upload files
+        results = {}
+        for album_name, files in files_by_album.items():
+            display_name = album_name if album_name else '(no album)'
+            logger.info(f"Retrying Photos copy for album: {display_name} ({len(files)} files)")
+            
+            for file_path in files:
+                try:
+                    logger.debug(f"Retrying Photos copy: {file_path.name}")
+                    success = self.icloud_uploader.upload_file(file_path, album_name=album_name if album_name else None)
+                    
+                    if success:
+                        file_state = self.state_manager._file_state.get(str(file_path), {})
+                        zip_name = file_state.get('zip_name', 'unknown')
+                        # Get asset identifier if available
+                        asset_id = None
+                        if hasattr(self.icloud_uploader, '_get_asset_identifier'):
+                            asset_id = self.icloud_uploader._get_asset_identifier(file_path)
+                        self.state_manager.mark_file_copied_to_photos(str(file_path), zip_name, asset_id)
+                        results[file_path] = True
+                        logger.debug(f"✓ Successfully copied {file_path.name} to Photos")
+                    else:
+                        file_state = self.state_manager._file_state.get(str(file_path), {})
+                        zip_name = file_state.get('zip_name', 'unknown')
+                        self.state_manager.mark_file_failed(
+                            str(file_path),
+                            zip_name,
+                            FileProcessingState.FAILED_PHOTOS_COPY,
+                            "Upload returned False"
+                        )
+                        results[file_path] = False
+                except Exception as e:
+                    logger.error(f"Failed to copy {file_path.name} to Photos: {e}")
+                    file_state = self.state_manager._file_state.get(str(file_path), {})
+                    zip_name = file_state.get('zip_name', 'unknown')
+                    self.state_manager.mark_file_failed(
+                        str(file_path),
+                        zip_name,
+                        FileProcessingState.FAILED_PHOTOS_COPY,
+                        str(e)
+                    )
+                    results[file_path] = False
+        
+        successful = sum(1 for v in results.values() if v)
+        logger.info(f"Retried Photos copies: {successful}/{len(results)} succeeded")
+        
+        return results
+    
     def _do_final_cleanup(self):
         """Perform final cleanup of processed files."""
         if self.config['processing'].get('cleanup_after_upload', False):
@@ -994,60 +1225,107 @@ class MigrationOrchestrator:
         Returns:
             True if successful, False otherwise
         """
+        zip_name = zip_path.name
         try:
             logger.info("=" * 60)
-            logger.info(f"Processing zip {zip_number}/{total_zips}: {zip_path.name}")
+            logger.info(f"Processing zip {zip_number}/{total_zips}: {zip_name}")
             logger.info("=" * 60)
             
+            # Check if zip is already complete
+            if self.state_manager.is_zip_complete(zip_name):
+                logger.info(f"⏭️  Skipping {zip_name} - already fully processed")
+                return True
+            
+            # Set checkpoint
+            self.state_manager.set_checkpoint('extract', zip_name=zip_name)
+            
             # Extract this zip file
-            try:
-                extracted_dir = self.extractor.extract_zip(zip_path)
-            except ExtractionError as e:
-                # Handle corrupted zip file - raise CorruptedZipException to stop and prompt user
-                error_msg = str(e)
-                file_size_mb = zip_path.stat().st_size / (1024 * 1024) if zip_path.exists() else None
-                
-                # Create minimal file_info if not provided
-                if not file_info:
-                    file_info = {
-                        'id': 'unknown',
-                        'name': zip_path.name,
-                        'size': str(zip_path.stat().st_size) if zip_path.exists() else '0'
-                    }
-                
-                # Raise CorruptedZipException to stop processing and show modal
-                raise CorruptedZipException(
-                    error_msg,
-                    str(zip_path),
-                    file_info,
-                    file_size_mb
-                ) from e
-            except (zipfile.BadZipFile, RuntimeError) as e:
-                # Fallback for other zip errors
-                error_msg = str(e)
-                file_size_mb = zip_path.stat().st_size / (1024 * 1024) if zip_path.exists() else None
-                
-                if not file_info:
-                    file_info = {
-                        'id': 'unknown',
-                        'name': zip_path.name,
-                        'size': str(zip_path.stat().st_size) if zip_path.exists() else '0'
-                    }
-                
-                raise CorruptedZipException(
-                    error_msg,
-                    str(zip_path),
-                    file_info,
-                    file_size_mb
-                ) from e
+            # Check if already extracted
+            extracted_dir = None
+            if self.state_manager.is_zip_extracted(zip_name):
+                zip_state = self.state_manager._zip_state.get(zip_name, {})
+                extracted_dir_str = zip_state.get('extracted_dir')
+                if extracted_dir_str and Path(extracted_dir_str).exists():
+                    extracted_dir = Path(extracted_dir_str)
+                    logger.info(f"⏭️  Zip {zip_name} already extracted, using existing extraction")
+                else:
+                    logger.info(f"Zip {zip_name} marked as extracted but directory missing, re-extracting")
+            
+            if extracted_dir is None:
+                try:
+                    logger.info(f"Extracting {zip_name}...")
+                    extracted_dir = self.extractor.extract_zip(zip_path)
+                    self.state_manager.mark_zip_extracted(zip_name, str(extracted_dir))
+                    logger.info(f"✓ Extracted {zip_name}")
+                except ExtractionError as e:
+                    # Handle corrupted zip file - raise CorruptedZipException to stop and prompt user
+                    error_msg = str(e)
+                    file_size_mb = zip_path.stat().st_size / (1024 * 1024) if zip_path.exists() else None
+                    
+                    # Create minimal file_info if not provided
+                    if not file_info:
+                        file_info = {
+                            'id': 'unknown',
+                            'name': zip_path.name,
+                            'size': str(zip_path.stat().st_size) if zip_path.exists() else '0'
+                        }
+                    
+                    # Mark as failed extraction
+                    self.state_manager.mark_zip_failed(
+                        zip_name,
+                        ZipProcessingState.FAILED_EXTRACTION,
+                        error_msg
+                    )
+                    
+                    # Raise CorruptedZipException to stop processing and show modal
+                    raise CorruptedZipException(
+                        error_msg,
+                        str(zip_path),
+                        file_info,
+                        file_size_mb
+                    ) from e
+                except (zipfile.BadZipFile, RuntimeError) as e:
+                    # Fallback for other zip errors
+                    error_msg = str(e)
+                    file_size_mb = zip_path.stat().st_size / (1024 * 1024) if zip_path.exists() else None
+                    
+                    if not file_info:
+                        file_info = {
+                            'id': 'unknown',
+                            'name': zip_path.name,
+                            'size': str(zip_path.stat().st_size) if zip_path.exists() else '0'
+                        }
+                    
+                    # Mark as failed extraction
+                    self.state_manager.mark_zip_failed(
+                        zip_name,
+                        ZipProcessingState.FAILED_EXTRACTION,
+                        error_msg
+                    )
+                    
+                    raise CorruptedZipException(
+                        error_msg,
+                        str(zip_path),
+                        file_info,
+                        file_size_mb
+                    ) from e
+            
+            # Set checkpoint
+            self.state_manager.set_checkpoint('convert', zip_name=zip_name)
             
             # Process metadata for this zip
+            logger.info(f"Identifying media files in {zip_name}...")
             media_json_pairs = self.extractor.identify_media_json_pairs(extracted_dir)
             logger.info(f"Found {len(media_json_pairs)} media files in this zip")
             
             if not media_json_pairs:
-                logger.warning(f"No media files found in {zip_path.name}, skipping")
+                logger.warning(f"No media files found in {zip_name}, skipping")
+                self.state_manager.mark_zip_uploaded(zip_name)  # Mark as complete (nothing to process)
                 return True
+            
+            # Mark files as extracted
+            for media_file in media_json_pairs.keys():
+                self.state_manager.mark_file_extracted(str(media_file), zip_name)
             
             # Merge metadata
             processed_dir = self.base_dir / self.config['processing']['processed_dir']
@@ -1057,11 +1335,56 @@ class MigrationOrchestrator:
             batch_size = self.config['processing']['batch_size']
             all_files = list(media_json_pairs.keys())
             
-            for i in range(0, len(all_files), batch_size):
-                batch = all_files[i:i + batch_size]
-                batch_pairs = {f: media_json_pairs[f] for f in batch}
-                logger.info(f"Processing metadata batch {i // batch_size + 1}/{(len(all_files) + batch_size - 1) // batch_size}")
-                self.metadata_merger.merge_all_metadata(batch_pairs, output_dir=processed_dir)
+            # Check which files need conversion
+            files_to_convert = []
+            for media_file in all_files:
+                processed_file = processed_dir / media_file.name
+                file_state = self.state_manager.get_file_state(str(media_file))
+                
+                # Skip if already converted and processed file exists
+                if file_state == FileProcessingState.CONVERTED.value and processed_file.exists():
+                    logger.debug(f"⏭️  Skipping conversion for {media_file.name} - already converted")
+                    continue
+                
+                files_to_convert.append(media_file)
+            
+            if files_to_convert:
+                logger.info(f"Converting {len(files_to_convert)} files (skipping {len(all_files) - len(files_to_convert)} already converted)")
+                
+                for i in range(0, len(files_to_convert), batch_size):
+                    batch = files_to_convert[i:i + batch_size]
+                    batch_pairs = {f: media_json_pairs[f] for f in batch}
+                    logger.info(f"Processing metadata batch {i // batch_size + 1}/{(len(files_to_convert) + batch_size - 1) // batch_size}")
+                    
+                    try:
+                        self.metadata_merger.merge_all_metadata(batch_pairs, output_dir=processed_dir)
+                        
+                        # Mark files as converted
+                        for media_file in batch:
+                            processed_file = processed_dir / media_file.name
+                            if processed_file.exists():
+                                self.state_manager.mark_file_converted(str(processed_file), zip_name)
+                            else:
+                                # If processed file doesn't exist, mark original as converted
+                                self.state_manager.mark_file_converted(str(media_file), zip_name)
+                    except Exception as e:
+                        logger.error(f"Error in metadata batch: {e}")
+                        # Mark failed files
+                        for media_file in batch:
+                            self.state_manager.mark_file_failed(
+                                str(media_file),
+                                zip_name,
+                                FileProcessingState.FAILED_CONVERSION,
+                                str(e)
+                            )
+            else:
+                logger.info(f"All files in {zip_name} already converted")
+            
+            # Mark zip as converted
+            self.state_manager.mark_zip_converted(zip_name)
+            
+            # Set checkpoint
+            self.state_manager.set_checkpoint('upload', zip_name=zip_name)
             
             # Parse albums for this zip
             parser = AlbumParser()
@@ -1104,20 +1427,38 @@ class MigrationOrchestrator:
                 if action == 'stop':
                     raise RuntimeError(f"Migration stopped by user due to verification failure for {failed_file_path.name}")
             
+            # Filter out files that are already uploaded
+            files_to_upload = []
+            for file_path in processed_files:
+                file_state = self.state_manager.get_file_state(str(file_path))
+                if file_state == FileProcessingState.SYNCED_TO_ICLOUD.value:
+                    logger.debug(f"⏭️  Skipping {file_path.name} - already synced to iCloud")
+                    continue
+                files_to_upload.append(file_path)
+            
+            if not files_to_upload:
+                logger.info(f"All files in {zip_name} already uploaded")
+                self.state_manager.mark_zip_uploaded(zip_name)
+                self.state_manager.clear_checkpoint()
+                return True
+            
+            logger.info(f"Uploading {len(files_to_upload)} files from {zip_name} (skipping {len(processed_files) - len(files_to_upload)} already uploaded)")
+            
             # Upload
+            upload_results = {}
             if isinstance(self.icloud_uploader, iCloudPhotosSyncUploader):
+                logger.info(f"Copying {len(files_to_upload)} files to Photos library...")
                 upload_results = self.icloud_uploader.upload_files_batch(
-                    processed_files,
+                    files_to_upload,
                     albums=file_to_album,
                     verify_after_upload=True,
                     on_verification_failure=verification_failure_callback
                 )
             else:
                 # Group by album using file_to_album mapping
-                upload_results = {}
                 # Group processed files by album
                 files_by_album = {}
-                for file_path in processed_files:
+                for file_path in files_to_upload:
                     album_name = file_to_album.get(file_path, '')
                     if album_name:
                         if album_name not in files_by_album:
@@ -1142,19 +1483,51 @@ class MigrationOrchestrator:
                         )
                         upload_results.update(album_results)
             
+            # Update state for uploaded files
+            for file_path, success in upload_results.items():
+                if success:
+                    if isinstance(self.icloud_uploader, iCloudPhotosSyncUploader):
+                        # For Photos sync, mark as copied to Photos
+                        # Get asset identifier if available
+                        asset_id = None
+                        if hasattr(self.icloud_uploader, '_get_asset_identifier'):
+                            try:
+                                asset_id = self.icloud_uploader._get_asset_identifier(file_path)
+                            except Exception:
+                                pass
+                        self.state_manager.mark_file_copied_to_photos(str(file_path), zip_name, asset_id)
+                        # Also mark as synced (Photos will sync automatically)
+                        self.state_manager.mark_file_synced_to_icloud(str(file_path), zip_name)
+                    else:
+                        # For API upload, mark as synced directly
+                        self.state_manager.mark_file_synced_to_icloud(str(file_path), zip_name)
+                else:
+                    # Mark as failed upload
+                    self.state_manager.mark_file_failed(
+                        str(file_path),
+                        zip_name,
+                        FileProcessingState.FAILED_UPLOAD,
+                        "Upload failed"
+                    )
+            
             successful = sum(1 for v in upload_results.values() if v)
             failed_count = len(upload_results) - successful
-            logger.info(f"Uploaded {successful}/{len(upload_results)} files from {zip_path.name}")
+            logger.info(f"Uploaded {successful}/{len(upload_results)} files from {zip_name}")
             
             # Save failed uploads for retry
             if failed_count > 0:
                 failed_files = [str(path) for path, success in upload_results.items() if not success]
                 self._save_failed_uploads(failed_files, file_to_album)
-                logger.warning(f"⚠️  {failed_count} files from {zip_path.name} failed to upload")
+                logger.warning(f"⚠️  {failed_count} files from {zip_name} failed to upload")
                 logger.warning(f"Failed uploads saved to: {self.failed_uploads_file}")
                 # Don't delete zip file if there are failed uploads - keep it for retry
-                logger.warning(f"⚠️  Keeping zip file {zip_path.name} for retry of failed uploads")
+                logger.warning(f"⚠️  Keeping zip file {zip_name} for retry of failed uploads")
+                # Don't mark zip as uploaded if there are failures
                 return True  # Return True but don't delete zip
+            
+            # Mark zip as uploaded
+            self.state_manager.mark_zip_uploaded(zip_name)
+            self.state_manager.clear_checkpoint()
             
             # Cleanup extracted files for this zip (save disk space)
             import shutil
@@ -1170,7 +1543,13 @@ class MigrationOrchestrator:
             # Re-raise to stop migration
             raise
         except Exception as e:
-            logger.error(f"Failed to process {zip_path.name}: {e}", exc_info=True)
+            logger.error(f"Failed to process {zip_name}: {e}", exc_info=True)
+            # Mark zip as failed (unknown step)
+            self.state_manager.mark_zip_failed(
+                zip_name,
+                ZipProcessingState.FAILED_UPLOAD,
+                str(e)
+            )
             return False
     
     def _restart_from_scratch(self):
@@ -1183,6 +1562,10 @@ class MigrationOrchestrator:
         logger.info("=" * 60)
         
         import shutil
+        
+        # Clear state
+        self.state_manager.clear_state()
+        logger.info("  ✓ Cleared state files")
         
         # Clean up zip files
         zip_dir = self.base_dir / self.config['processing']['zip_dir']
@@ -1744,11 +2127,38 @@ def main():
         action='store_true',
         help='Retry previously failed uploads (skips download/extract/process steps)'
     )
+    parser.add_argument(
+        '--retry-failed-extractions',
+        action='store_true',
+        help='Retry only failed zip extractions'
+    )
+    parser.add_argument(
+        '--retry-failed-conversions',
+        action='store_true',
+        help='Retry only failed file conversions'
+    )
+    parser.add_argument(
+        '--retry-failed-photos-copies',
+        action='store_true',
+        help='Retry only failed Photos library copies (requires --use-sync)'
+    )
     
     args = parser.parse_args()
     
     orchestrator = MigrationOrchestrator(args.config)
-    orchestrator.run(use_sync_method=args.use_sync, retry_failed=args.retry_failed)
+    
+    # Handle retry flags
+    if args.retry_failed_extractions:
+        orchestrator.retry_failed_extractions()
+    elif args.retry_failed_conversions:
+        orchestrator.retry_failed_conversions()
+    elif args.retry_failed_photos_copies:
+        if not args.use_sync:
+            logger.error("--retry-failed-photos-copies requires --use-sync flag")
+            return
+        orchestrator.retry_failed_photos_copies(use_sync_method=True)
+    else:
+        orchestrator.run(use_sync_method=args.use_sync, retry_failed=args.retry_failed)
 
 
 if __name__ == '__main__':

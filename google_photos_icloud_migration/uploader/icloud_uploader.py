@@ -2238,16 +2238,29 @@ class iCloudPhotosSyncUploader:
                     error_ref[0] = error if error else "Unknown error"
                 completed[0] = True
             
+            # Log copying to Photos library
+            logger.info(f"Copying {file_path.name} to Photos library...")
+            if album_name:
+                logger.debug(f"  Target album: {album_name}")
+            
             # Perform changes asynchronously
             self.PHPhotoLibrary.sharedPhotoLibrary().performChanges_completionHandler_(
                 perform_changes, completion_handler
             )
             
-            # Wait for completion
+            # Wait for completion with progress logging
             from Foundation import NSRunLoop, NSDefaultRunLoopMode, NSDate
             timeout = 30
             start_time = time.time()
+            last_log_time = start_time
+            
             while not completed[0] and (time.time() - start_time) < timeout:
+                elapsed = time.time() - start_time
+                # Log progress every 5 seconds
+                if elapsed - (last_log_time - start_time) >= 5:
+                    logger.debug(f"  Waiting for Photos library to complete copy of {file_path.name}... ({elapsed:.1f}s)")
+                    last_log_time = time.time()
+                
                 NSRunLoop.currentRunLoop().runMode_beforeDate_(
                     NSDefaultRunLoopMode,
                     NSDate.dateWithTimeIntervalSinceNow_(0.1)
@@ -2255,24 +2268,27 @@ class iCloudPhotosSyncUploader:
                 time.sleep(0.1)
             
             if error_ref[0]:
-                logger.error(f"Failed to save {file_path.name}: {error_ref[0]}")
+                logger.error(f"Failed to copy {file_path.name} to Photos library: {error_ref[0]}")
                 import traceback
                 logger.debug(traceback.format_exc())
                 return False
             
             if not completed[0]:
-                logger.error(f"Save operation timed out for {file_path.name}")
+                logger.error(f"Copy operation timed out for {file_path.name} after {timeout}s")
                 return False
             
             if success_ref[0]:
+                logger.info(f"✓ Copied {file_path.name} to Photos library")
+                
                 # Get the actual asset identifier after upload completes
                 asset_local_identifier = None
                 if created_asset_placeholder[0]:
                     placeholder_id = created_asset_placeholder[0].localIdentifier()
+                    logger.debug(f"  Waiting for asset to be available in Photos library...")
                     # Wait a moment for the asset to be available, then fetch it
                     from Foundation import NSRunLoop, NSDefaultRunLoopMode, NSDate
                     import time
-                    for _ in range(10):  # Wait up to 1 second for asset to appear
+                    for i in range(10):  # Wait up to 1 second for asset to appear
                         try:
                             from Photos import PHAsset
                             fetch_result = PHAsset.fetchAssetsWithLocalIdentifiers_options_(
@@ -2282,6 +2298,7 @@ class iCloudPhotosSyncUploader:
                             if fetch_result.count() > 0:
                                 asset = fetch_result.objectAtIndex_(0)
                                 asset_local_identifier = asset.localIdentifier()
+                                logger.debug(f"  Asset available in Photos library (ID: {asset_local_identifier[:20]}...)")
                                 break
                         except Exception:
                             pass
@@ -2292,9 +2309,25 @@ class iCloudPhotosSyncUploader:
                         time.sleep(0.1)
                 
                 if album_name and album_collection:
-                    logger.debug(f"Saved {file_path.name} to Photos library and added to album '{album_name}'")
+                    logger.info(f"  Added to album: '{album_name}'")
                 else:
-                    logger.debug(f"Saved {file_path.name} to Photos library")
+                    logger.debug(f"  Saved without album assignment")
+                
+                # Log sync status
+                logger.info(f"  Photos will automatically sync to iCloud Photos if enabled")
+                
+                # Check initial sync status if asset identifier is available
+                if asset_local_identifier:
+                    logger.debug(f"  Checking initial sync status for {file_path.name}...")
+                    sync_status = self.check_asset_sync_status(asset_local_identifier)
+                    if sync_status:
+                        if sync_status.get('synced'):
+                            logger.info(f"  ✓ Already synced to iCloud Photos")
+                        elif sync_status.get('asset_exists'):
+                            logger.info(f"  ⏳ Syncing to iCloud Photos (in progress)")
+                        else:
+                            logger.debug(f"  Asset exists, waiting for sync to start")
+                
                 self._save_uploaded_file(file_path, album_name, asset_local_identifier=asset_local_identifier)
                 return True
             else:
