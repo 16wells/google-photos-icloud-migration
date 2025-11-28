@@ -9,6 +9,7 @@ A macOS tool to migrate photos and videos from Google Photos (exported via Googl
 - Merges JSON metadata into media files using ExifTool
 - Preserves album structures from Google Takeout
 - Uploads to iCloud Photos using PhotoKit (macOS native integration)
+- **Modern Web UI** with real-time progress tracking (NEW!)
 
 ## Prerequisites
 
@@ -67,7 +68,19 @@ Edit `config.yaml` with your settings:
 
 ## Usage
 
-### Basic Usage
+### Web UI (Recommended)
+
+Start the modern web interface for an intuitive, visual migration experience:
+
+```bash
+python web_server.py
+```
+
+Then open your browser to `http://localhost:5000`
+
+See [WEB_UI.md](WEB_UI.md) for detailed web UI documentation.
+
+### Command Line Usage
 
 ```bash
 python main.py --config config.yaml
@@ -226,6 +239,7 @@ For issues or questions:
 ## Documentation
 
 - **[QUICKSTART.md](QUICKSTART.md)** - Get started in 5 minutes (for users with prerequisites installed)
+- **[WEB_UI.md](WEB_UI.md)** - Modern web interface guide with real-time progress tracking
 - **[COMPLETE_INSTALLATION_GUIDE.md](COMPLETE_INSTALLATION_GUIDE.md)** - Step-by-step setup on a new MacBook
 - **[AUTHENTICATION_GUIDE.md](AUTHENTICATION_GUIDE.md)** - Detailed authentication setup guide
 - **[TESTING.md](TESTING.md)** - Test the migration before running the full process
