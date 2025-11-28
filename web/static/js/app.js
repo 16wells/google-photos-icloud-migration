@@ -8,7 +8,7 @@ const socket = io();
 // Global state
 let currentStatus = 'idle';
 let configPath = 'config.yaml';
-let currentLogLevel = 'INFO';
+let currentLogLevel = 'DEBUG';
 
 // DOM elements
 const elements = {
@@ -36,8 +36,7 @@ const elements = {
     statMediaUploaded: document.getElementById('stat-media-uploaded'),
     statAlbums: document.getElementById('stat-albums'),
     statFailed: document.getElementById('stat-failed'),
-    statCorrupted: document.getElementById('stat-corrupted'),
-    statElapsed: document.getElementById('stat-elapsed')
+    statCorrupted: document.getElementById('stat-corrupted')
 };
 
 // Socket.IO event handlers
@@ -267,7 +266,10 @@ function updateStatistics(data) {
         elements.statCorrupted.textContent = formatNumber(data.corrupted_zips);
     }
     if (data.elapsed_time !== undefined) {
-        elements.statElapsed.textContent = formatDuration(data.elapsed_time);
+        const elapsedElement = document.getElementById('progress-elapsed-time');
+        if (elapsedElement) {
+            elapsedElement.textContent = formatDuration(data.elapsed_time);
+        }
     }
 }
 
@@ -928,9 +930,30 @@ async function redownloadCorruptedZip() {
     }
 }
 
-function skipCorruptedZip() {
+async function skipCorruptedZip() {
     addLog('warning', `Skipping corrupted zip file: ${corruptedZipData?.file_name || 'Unknown'}`);
+    
+    try {
+        // Signal server to skip this corrupted zip
+        const response = await fetch('/api/corrupted-zip/skip', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                file_name: corruptedZipData?.file_name,
+                file_id: corruptedZipData?.file_id
+            })
+        });
+        
+        const data = await response.json();
+        if (data.success) {
+            addLog('info', 'Corrupted zip skipped, migration will continue to next file');
+        }
+    } catch (error) {
+        addLog('error', `Error skipping corrupted zip: ${error.message}`);
+    }
+    
     hideCorruptedZipModal();
-    // Note: Migration will remain paused - user would need to manually continue or restart
 }
 

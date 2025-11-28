@@ -1412,20 +1412,40 @@ class MigrationOrchestrator:
                         # Set flag to wait for redownload
                         migration_state['waiting_for_corrupted_zip_redownload'] = True
                         migration_state['corrupted_zip_redownloaded'] = False
+                        migration_state['skip_corrupted_zip'] = False  # Reset skip flag
                         
-                        # Wait for redownload (up to 1 hour)
+                        # Wait for redownload (up to 1 hour), but check for skip flag
                         max_wait = 3600
                         waited = 0
+                        skipped = False
                         while not migration_state.get('corrupted_zip_redownloaded', False) and waited < max_wait:
+                            # Check if user requested to skip this corrupted zip
+                            if migration_state.get('skip_corrupted_zip', False):
+                                logger.info(f"User requested to skip corrupted zip: {e.zip_path}")
+                                migration_state['skip_corrupted_zip'] = False
+                                migration_state['waiting_for_corrupted_zip_redownload'] = False
+                                skipped = True
+                                # In web UI mode, auto-skip continue prompts
+                                import sys
+                                if not sys.stdin.isatty():
+                                    self._skip_continue_prompts = True
+                                break
+                            
                             time.sleep(1)
                             waited += 1
                             # Check stop flag
                             if hasattr(self, '_stop_requested') and self._stop_requested:
                                 raise MigrationStoppedException("Migration stopped by user")
                         
-                        if waited >= max_wait:
-                            logger.warning("Timeout waiting for corrupted zip redownload. Skipping file.")
+                        # If we skipped or timed out, continue to next zip
+                        if skipped or (waited >= max_wait and not migration_state.get('corrupted_zip_redownloaded', False)):
+                            if waited >= max_wait and not skipped:
+                                logger.warning("Timeout waiting for corrupted zip redownload. Skipping file.")
                             failed += 1
+                            # In web UI mode, auto-skip continue prompts
+                            import sys
+                            if not sys.stdin.isatty():
+                                self._skip_continue_prompts = True
                             continue
                         
                         # Reset flags
@@ -1439,6 +1459,10 @@ class MigrationOrchestrator:
                             successful += 1
                         else:
                             failed += 1
+                        # Skip continue prompt after retry in web UI mode
+                        import sys
+                        if not sys.stdin.isatty():
+                            self._skip_continue_prompts = True
                         continue
                         
                     except (ImportError, AttributeError):
@@ -1541,20 +1565,40 @@ class MigrationOrchestrator:
                         # Set flag to wait for redownload
                         migration_state['waiting_for_corrupted_zip_redownload'] = True
                         migration_state['corrupted_zip_redownloaded'] = False
+                        migration_state['skip_corrupted_zip'] = False  # Reset skip flag
                         
-                        # Wait for redownload (up to 1 hour)
+                        # Wait for redownload (up to 1 hour), but check for skip flag
                         max_wait = 3600
                         waited = 0
+                        skipped = False
                         while not migration_state.get('corrupted_zip_redownloaded', False) and waited < max_wait:
+                            # Check if user requested to skip this corrupted zip
+                            if migration_state.get('skip_corrupted_zip', False):
+                                logger.info(f"User requested to skip corrupted zip: {e.zip_path}")
+                                migration_state['skip_corrupted_zip'] = False
+                                migration_state['waiting_for_corrupted_zip_redownload'] = False
+                                skipped = True
+                                # In web UI mode, auto-skip continue prompts
+                                import sys
+                                if not sys.stdin.isatty():
+                                    self._skip_continue_prompts = True
+                                break
+                            
                             time.sleep(1)
                             waited += 1
                             # Check stop flag
                             if hasattr(self, '_stop_requested') and self._stop_requested:
                                 raise MigrationStoppedException("Migration stopped by user")
                         
-                        if waited >= max_wait:
-                            logger.warning("Timeout waiting for corrupted zip redownload. Skipping file.")
+                        # If we skipped or timed out, continue to next zip
+                        if skipped or (waited >= max_wait and not migration_state.get('corrupted_zip_redownloaded', False)):
+                            if waited >= max_wait and not skipped:
+                                logger.warning("Timeout waiting for corrupted zip redownload. Skipping file.")
                             failed += 1
+                            # In web UI mode, auto-skip continue prompts
+                            import sys
+                            if not sys.stdin.isatty():
+                                self._skip_continue_prompts = True
                             continue
                         
                         # Reset flags
@@ -1568,6 +1612,10 @@ class MigrationOrchestrator:
                             successful += 1
                         else:
                             failed += 1
+                        # Skip continue prompt after retry in web UI mode
+                        import sys
+                        if not sys.stdin.isatty():
+                            self._skip_continue_prompts = True
                         continue
                         
                     except (ImportError, AttributeError):

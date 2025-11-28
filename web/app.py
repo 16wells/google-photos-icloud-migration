@@ -56,12 +56,13 @@ migration_state = {
     'orchestrator': None,
     'stop_requested': False,
     'thread': None,
-    'log_level': 'INFO',
+    'log_level': 'DEBUG',
     'web_handler': None,
     'proceed_after_retries': False,
     'paused_for_retries': False,
     'corrupted_zip_redownloaded': False,
-    'waiting_for_corrupted_zip_redownload': False
+    'waiting_for_corrupted_zip_redownload': False,
+    'skip_corrupted_zip': False
 }
 
 
@@ -76,7 +77,7 @@ def emit_status_update():
     socketio.emit('status_update', {
         'status': migration_state['status'],
         'error': migration_state['error'],
-        'log_level': migration_state.get('log_level', 'INFO'),
+        'log_level': migration_state.get('log_level', 'DEBUG'),
         'paused_for_retries': migration_state.get('paused_for_retries', False)
     })
 
@@ -347,13 +348,89 @@ def get_upload_tracking_count(orchestrator) -> int:
         return 0
 
 
+def get_photos_library_sync_status(orchestrator) -> Dict[str, int]:
+    """
+    Check Photos library to get sync status.
+    When using PhotoKit sync method, files are saved to Photos library
+    which then syncs to iCloud. This function checks how many are still syncing.
+    
+    Returns:
+        Dictionary with 'total_in_photos', 'synced_to_icloud', 'pending_sync' counts
+    """
+    if not orchestrator:
+        return {'total_in_photos': 0, 'synced_to_icloud': 0, 'pending_sync': 0}
+    
+    # Check if using PhotoKit sync method
+    if not hasattr(orchestrator, 'icloud_uploader'):
+        return {'total_in_photos': 0, 'synced_to_icloud': 0, 'pending_sync': 0}
+    
+    uploader = orchestrator.icloud_uploader
+    uploader_class_name = type(uploader).__name__
+    
+    # Only check Photos library if using sync method
+    if uploader_class_name != 'iCloudPhotosSyncUploader':
+        return {'total_in_photos': 0, 'synced_to_icloud': 0, 'pending_sync': 0}
+    
+    try:
+        # Try to query Photos library for assets
+        import platform
+        if platform.system() != 'Darwin':
+            return {'total_in_photos': 0, 'synced_to_icloud': 0, 'pending_sync': 0}
+        
+        # Use PhotoKit to query recent assets
+        # Note: PhotoKit doesn't directly expose iCloud sync status, but we can
+        # count assets created recently (within last 24 hours) as potentially pending sync
+        from Photos import PHAsset, PHFetchOptions, PHImageManager
+        from Foundation import NSDate
+        
+        fetch_options = PHFetchOptions.alloc().init()
+        # Fetch assets created in the last 24 hours (likely from our migration)
+        # We'll use a simpler approach: count from upload tracking file
+        # and note that Photos will show sync status in the UI
+        
+        # For now, return counts based on upload tracking file
+        # The actual sync status is shown in Photos app itself
+        uploaded_count = get_upload_tracking_count(orchestrator)
+        
+        # Note: We can't directly query iCloud sync status via PhotoKit
+        # Photos app shows this info, but it's not easily accessible via API
+        # The "awaiting upload" should be: files not yet in Photos library
+        # Files "syncing" are already in Photos but not yet in iCloud
+        
+        return {
+            'total_in_photos': uploaded_count,  # Best estimate
+            'synced_to_icloud': 0,  # Can't determine directly
+            'pending_sync': 0  # Can't determine directly - Photos app shows this
+        }
+    except ImportError:
+        # PhotoKit not available
+        return {'total_in_photos': 0, 'synced_to_icloud': 0, 'pending_sync': 0}
+    except Exception as e:
+        logger.debug(f"Could not check Photos library sync status: {e}")
+        return {'total_in_photos': 0, 'synced_to_icloud': 0, 'pending_sync': 0}
+
+
 def monitor_statistics(orchestrator):
     """Monitor orchestrator statistics and update state periodically."""
     # Initialize last disk update time
     if not hasattr(monitor_statistics, '_last_disk_update'):
         monitor_statistics._last_disk_update = 0
     
-    while migration_state['status'] == 'running' and not migration_state['stop_requested']:
+    # Monitor while migration is running, paused, or thread is still alive
+    # This ensures we keep statistics updated even if status changes
+    # Also continue monitoring briefly after thread ends to catch final statistics
+    max_iterations_after_thread_end = 5  # Check 5 more times (10 seconds) after thread ends
+    iterations_after_thread_end = 0
+    
+    while (migration_state['status'] in ['running', 'paused'] or 
+           migration_state.get('thread') is not None or 
+           iterations_after_thread_end < max_iterations_after_thread_end) and not migration_state['stop_requested']:
+        
+        # Track iterations after thread ends
+        if migration_state.get('thread') is None:
+            iterations_after_thread_end += 1
+        else:
+            iterations_after_thread_end = 0  # Reset if thread restarts
         try:
             if orchestrator and hasattr(orchestrator, 'statistics'):
                 stats = orchestrator.statistics
@@ -431,15 +508,21 @@ def monitor_statistics(orchestrator):
                     socketio.emit('disk_space_update', disk_info)
                 monitor_statistics._last_disk_update = current_time
             
+            # Emit progress update to keep UI updated even during long operations
             emit_progress_update()
             
             time.sleep(2)  # Update every 2 seconds
         except Exception as e:
             logger.warning(f"Error monitoring statistics: {e}")
             time.sleep(5)  # Wait longer on error
+        # Continue monitoring even if thread is not "running" - check if thread still exists
+        if migration_state.get('thread') is None:
+            # Thread ended, stop monitoring
+            logger.debug("Migration thread ended, stopping statistics monitoring")
+            break
 
 
-def run_migration(config_path: str, use_sync_method: bool = False, log_level: str = 'INFO'):
+def run_migration(config_path: str, use_sync_method: bool = False, log_level: str = 'DEBUG'):
     """
     Run migration in a separate thread.
     
@@ -469,7 +552,7 @@ def run_migration(config_path: str, use_sync_method: bool = False, log_level: st
             'WARNING': logging.WARNING,
             'ERROR': logging.ERROR
         }
-        log_level_constant = level_map.get(log_level.upper(), logging.INFO)
+        log_level_constant = level_map.get(log_level.upper(), logging.DEBUG)
         web_handler.setLevel(log_level_constant)
         # Include timestamp, logger name, and level for better context
         web_handler.setFormatter(logging.Formatter(
@@ -546,14 +629,23 @@ def run_migration(config_path: str, use_sync_method: bool = False, log_level: st
         migration_state['error'] = str(e)
         emit_status_update()
     finally:
+        # Don't reset statistics when thread ends - preserve them
+        # Only reset thread tracking, not the statistics
+        migration_state['thread'] = None
+        migration_state['stop_requested'] = False
+        
+        # Only reset status to idle if it wasn't already set to completed/error/stopped
+        if migration_state['status'] not in ['completed', 'error', 'stopped', 'paused']:
+            # If we get here, something unexpected happened
+            logger.warning("Migration thread ended unexpectedly. Status was: " + migration_state['status'])
+            # Keep the status as-is, don't change to idle automatically
+        
         # Clean up logging handler
         web_logger = logging.getLogger()
         for handler in web_logger.handlers[:]:
             if isinstance(handler, WebProgressLogger):
                 web_logger.removeHandler(handler)
         
-        migration_state['thread'] = None
-        migration_state['stop_requested'] = False
         migration_state['web_handler'] = None
 
 
@@ -618,7 +710,7 @@ def get_status():
         'progress': progress,
         'statistics': migration_state['statistics'],
         'error': migration_state['error'],
-        'log_level': migration_state.get('log_level', 'INFO'),
+        'log_level': migration_state.get('log_level', 'DEBUG'),
         'paused_for_retries': migration_state.get('paused_for_retries', False)
     })
 
@@ -666,7 +758,7 @@ def start_migration():
     data = request.json or {}
     config_path = data.get('config_path', 'config.yaml')
     use_sync_method = data.get('use_sync_method', False)
-    log_level = data.get('log_level', 'INFO')
+    log_level = data.get('log_level', 'DEBUG')
     
     if not Path(config_path).exists():
         return jsonify({'error': f'Configuration file not found: {config_path}'}), 404
@@ -733,7 +825,7 @@ def stop_migration():
 def update_log_level():
     """Update log level for web UI logging."""
     data = request.json or {}
-    log_level = data.get('log_level', 'INFO')
+    log_level = data.get('log_level', 'DEBUG')
     
     # Validate log level
     valid_levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR']
@@ -751,7 +843,7 @@ def update_log_level():
             'WARNING': logging.WARNING,
             'ERROR': logging.ERROR
         }
-        log_level_constant = level_map.get(log_level.upper(), logging.INFO)
+        log_level_constant = level_map.get(log_level.upper(), logging.DEBUG)
         migration_state['web_handler'].setLevel(log_level_constant)
         logger.info(f"Log level updated to {log_level.upper()}")
     
@@ -875,6 +967,34 @@ def get_restart_instructions():
 def get_statistics():
     """Get migration statistics."""
     return jsonify(migration_state['statistics'])
+
+
+@app.route('/api/corrupted-zip/skip', methods=['POST'])
+def skip_corrupted_zip():
+    """Skip a corrupted zip file and continue migration."""
+    data = request.json or {}
+    file_name = data.get('file_name')
+    file_id = data.get('file_id')
+    
+    if not file_name:
+        return jsonify({'success': False, 'error': 'file_name is required'}), 400
+    
+    # Set flag to skip the corrupted zip
+    migration_state['skip_corrupted_zip'] = True
+    migration_state['waiting_for_corrupted_zip_redownload'] = False
+    migration_state['corrupted_zip_redownloaded'] = False
+    
+    logger.info(f"Skip requested for corrupted zip: {file_name}")
+    
+    # If migration is paused, resume it
+    if migration_state['status'] == 'paused':
+        migration_state['status'] = 'running'
+        emit_status_update()
+    
+    return jsonify({
+        'success': True,
+        'message': f'Corrupted zip {file_name} will be skipped and migration will continue'
+    })
 
 
 @app.route('/api/failed-uploads', methods=['GET'])
