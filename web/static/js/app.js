@@ -136,6 +136,16 @@ function updateStatus(status, error = null, logLevel = null, pausedForRetries = 
         </span>
     `;
     
+    // Show/hide status help text
+    const statusHelpText = document.getElementById('status-help-text');
+    if (statusHelpText) {
+        if (status === 'idle' || status === 'running') {
+            statusHelpText.classList.remove('hidden');
+        } else {
+            statusHelpText.classList.add('hidden');
+        }
+    }
+    
     // Update button states
     elements.startBtn.disabled = status === 'running' || status === 'paused';
     elements.stopBtn.disabled = status !== 'running' && status !== 'paused';
@@ -195,6 +205,39 @@ function updateProgress(data) {
     
     if (data.current && data.total) {
         elements.progressMessage.textContent = `${data.message} (${data.current}/${data.total})`;
+    }
+    
+    // Update current activity section
+    const activitySection = document.getElementById('current-activity-section');
+    const activityText = document.getElementById('current-activity-text');
+    const statusExplanation = document.getElementById('status-explanation');
+    
+    if (data.current_activity) {
+        if (activitySection) activitySection.classList.remove('hidden');
+        if (activityText) activityText.textContent = data.current_activity;
+        
+        // Update explanation based on activity
+        if (statusExplanation) {
+            if (data.current_activity.includes('Unzipping')) {
+                statusExplanation.textContent = 'Unzipping can take several minutes for large files. The process is working even if status appears idle.';
+            } else if (data.current_activity.includes('Processing metadata')) {
+                statusExplanation.textContent = 'Applying timestamps and metadata to photos. This may take a while for large batches.';
+            } else if (data.current_activity.includes('Uploading')) {
+                statusExplanation.textContent = 'Uploading files to iCloud Photos. Progress may update slowly depending on upload speed.';
+            } else {
+                statusExplanation.textContent = 'The process is working. Status updates may be delayed during long operations.';
+            }
+        }
+    } else if (currentStatus === 'running') {
+        // Show generic working message if status is running but no specific activity
+        if (activitySection) activitySection.classList.remove('hidden');
+        if (activityText) activityText.textContent = 'Processing files...';
+        if (statusExplanation) {
+            statusExplanation.textContent = 'The migration is running. Check the Activity Log below for detailed progress.';
+        }
+    } else {
+        // Hide activity section when truly idle
+        if (activitySection) activitySection.classList.add('hidden');
     }
 }
 
@@ -788,15 +831,15 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }, 1000);
     
-    // Auto-refresh server status every 30 seconds
+    // Auto-refresh server status every 30 seconds (always, not just when migration is running)
     setInterval(() => {
         checkServerStatus();
     }, 30000);
     
-    // Auto-refresh disk space every 30 seconds
+    // Auto-refresh disk space every 60 seconds (1 minute)
     setInterval(() => {
         checkDiskSpace();
-    }, 30000);
+    }, 60000);
 });
 
 // Corrupted Zip Modal Functions

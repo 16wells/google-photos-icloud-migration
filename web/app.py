@@ -36,7 +36,9 @@ migration_state = {
         'current': 0,
         'total': 0,
         'percentage': 0,
-        'message': ''
+        'message': '',
+        'current_activity': None,  # Current operation happening now
+        'last_update_time': None
     },
             'statistics': {
                 'zip_files_total': 0,
@@ -97,6 +99,63 @@ class WebProgressLogger(logging.Handler):
 
 def update_progress_from_log(message: str):
     """Parse progress information from log messages and update state."""
+    import time
+    current_time = time.time()
+    
+    # Ensure status is 'running' when we see activity
+    if migration_state['status'] == 'idle' and any(keyword in message for keyword in [
+        'Processing zip', 'Extracting', 'Processing metadata', 'Uploading', 'Downloading',
+        'Found', 'Processing batch', 'Identified', 'Listing zip files'
+    ]):
+        migration_state['status'] = 'running'
+        emit_status_update()
+    
+    # Track current activity from log messages
+    current_activity = None
+    if 'Extracting' in message and 'to' in message:
+        current_activity = 'Unzipping files (this can take several minutes for large archives)'
+    elif 'Processing metadata batch' in message or 'Processing metadata' in message:
+        current_activity = 'Processing metadata and applying timestamps'
+    elif 'Uploading album' in message or 'Uploading to iCloud' in message:
+        current_activity = 'Uploading files to iCloud Photos'
+    elif 'Processing zip' in message:
+        current_activity = 'Processing ZIP file (extract → metadata → upload → cleanup)'
+    elif 'Downloading zip' in message:
+        current_activity = 'Downloading ZIP file from Google Drive'
+    elif 'Found' in message and 'media files' in message:
+        current_activity = 'Scanning for photos and videos'
+    elif 'Identified' in message and 'albums' in message:
+        current_activity = 'Organizing photos into albums'
+    elif 'Listing zip files' in message:
+        current_activity = 'Discovering ZIP files to process'
+    
+    if current_activity:
+        migration_state['progress']['current_activity'] = current_activity
+        migration_state['progress']['last_update_time'] = current_time
+    
+    # Extract statistics from log messages
+    
+    # "Found X zip files total to process"
+    zip_total_match = re.search(r'Found (\d+) zip files? (?:total to process|to process)', message)
+    if zip_total_match:
+        total = int(zip_total_match.group(1))
+        migration_state['statistics']['zip_files_total'] = total
+        emit_progress_update()
+    
+    # "Found X media files in this zip" or "Found X media files to process"
+    media_found_match = re.search(r'Found (\d+) media files?', message)
+    if media_found_match:
+        found = int(media_found_match.group(1))
+        migration_state['statistics']['media_files_found'] = migration_state['statistics'].get('media_files_found', 0) + found
+        emit_progress_update()
+    
+    # "Identified X albums"
+    albums_match = re.search(r'Identified (\d+) albums?', message)
+    if albums_match:
+        albums = int(albums_match.group(1))
+        migration_state['statistics']['albums_identified'] = albums
+        emit_progress_update()
+    
     # Try to extract progress information from log messages
     # Example: "Processing zip 5/10: filename.zip"
     zip_progress = re.search(r'Processing zip (\d+)/(\d+)', message)
@@ -108,7 +167,9 @@ def update_progress_from_log(message: str):
             'current': current,
             'total': total,
             'percentage': int((current / total * 100)) if total > 0 else 0,
-            'message': message
+            'message': message,
+            'current_activity': migration_state['progress'].get('current_activity', current_activity),
+            'last_update_time': current_time
         }
         migration_state['statistics']['zip_files_processed'] = current
         migration_state['statistics']['zip_files_total'] = total
@@ -116,8 +177,45 @@ def update_progress_from_log(message: str):
         emit_progress_update()  # Also emit statistics
         return
     
+    # "Processing existing zip X/Y: filename.zip"
+    existing_zip_progress = re.search(r'Processing existing zip (\d+)/(\d+)', message)
+    if existing_zip_progress:
+        current = int(existing_zip_progress.group(1))
+        total = int(existing_zip_progress.group(2))
+        migration_state['progress'] = {
+            'phase': 'Processing ZIP Files',
+            'current': current,
+            'total': total,
+            'percentage': int((current / total * 100)) if total > 0 else 0,
+            'message': message,
+            'current_activity': migration_state['progress'].get('current_activity', current_activity),
+            'last_update_time': current_time
+        }
+        migration_state['statistics']['zip_files_processed'] = current
+        migration_state['statistics']['zip_files_total'] = total
+        emit_progress_update()
+        return
+    
+    # "Downloading zip X/Y: filename.zip"
+    downloading_zip_progress = re.search(r'Downloading zip (\d+)/(\d+)', message)
+    if downloading_zip_progress:
+        current = int(downloading_zip_progress.group(1))
+        total = int(downloading_zip_progress.group(2))
+        migration_state['progress'] = {
+            'phase': 'Downloading ZIP Files',
+            'current': current,
+            'total': total,
+            'percentage': int((current / total * 100)) if total > 0 else 0,
+            'message': message,
+            'current_activity': migration_state['progress'].get('current_activity', current_activity),
+            'last_update_time': current_time
+        }
+        migration_state['statistics']['zip_files_total'] = total
+        emit_progress_update()
+        return
+    
     # Example: "Uploaded 150/200 files"
-    upload_progress = re.search(r'Uploaded (\d+)/(\d+)', message)
+    upload_progress = re.search(r'Uploaded (\d+)/(\d+) files?', message)
     if upload_progress:
         current = int(upload_progress.group(1))
         total = int(upload_progress.group(2))
@@ -126,27 +224,34 @@ def update_progress_from_log(message: str):
             'current': current,
             'total': total,
             'percentage': int((current / total * 100)) if total > 0 else 0,
-            'message': message
+            'message': message,
+            'current_activity': migration_state['progress'].get('current_activity', current_activity),
+            'last_update_time': current_time
         }
         migration_state['statistics']['media_files_uploaded'] = current
         emit_progress_update()
         return
     
     # Update phase from log message
-    if 'Phase 1' in message or 'Downloading' in message:
+    if 'Phase 1' in message or ('Downloading' in message and 'zip' in message.lower()):
         migration_state['progress']['phase'] = 'Downloading ZIP Files'
+        migration_state['progress']['last_update_time'] = current_time
         emit_progress_update()
     elif 'Phase 2' in message or 'Extracting' in message:
         migration_state['progress']['phase'] = 'Extracting Files'
+        migration_state['progress']['last_update_time'] = current_time
         emit_progress_update()
     elif 'Phase 3' in message or 'Processing metadata' in message:
         migration_state['progress']['phase'] = 'Processing Metadata'
+        migration_state['progress']['last_update_time'] = current_time
         emit_progress_update()
     elif 'Phase 4' in message or 'Parsing album' in message:
         migration_state['progress']['phase'] = 'Parsing Albums'
+        migration_state['progress']['last_update_time'] = current_time
         emit_progress_update()
-    elif 'Phase 5' in message or 'Uploading' in message:
+    elif 'Phase 5' in message or ('Uploading' in message and 'iCloud' in message):
         migration_state['progress']['phase'] = 'Uploading to iCloud'
+        migration_state['progress']['last_update_time'] = current_time
         emit_progress_update()
 
 
@@ -208,15 +313,53 @@ def get_disk_space_info(path: Path) -> Dict[str, Any]:
         }
 
 
+def get_upload_tracking_count(orchestrator) -> int:
+    """
+    Get count of files already marked as uploaded in the tracking file.
+    
+    Returns:
+        Number of files already uploaded (from tracking file)
+    """
+    if not orchestrator:
+        return 0
+    
+    upload_tracking_file = None
+    if hasattr(orchestrator, 'upload_tracking_file'):
+        upload_tracking_file = orchestrator.upload_tracking_file
+    elif hasattr(orchestrator, 'base_dir'):
+        upload_tracking_file = orchestrator.base_dir / 'uploaded_files.json'
+    
+    if not upload_tracking_file or not upload_tracking_file.exists():
+        return 0
+    
+    try:
+        import json
+        with open(upload_tracking_file, 'r') as f:
+            tracking_data = json.load(f)
+        # Count entries in tracking file (could be dict or list)
+        if isinstance(tracking_data, dict):
+            return len(tracking_data)
+        elif isinstance(tracking_data, list):
+            return len(tracking_data)
+        return 0
+    except Exception as e:
+        logger.debug(f"Could not read upload tracking file: {e}")
+        return 0
+
+
 def monitor_statistics(orchestrator):
     """Monitor orchestrator statistics and update state periodically."""
+    # Initialize last disk update time
+    if not hasattr(monitor_statistics, '_last_disk_update'):
+        monitor_statistics._last_disk_update = 0
+    
     while migration_state['status'] == 'running' and not migration_state['stop_requested']:
         try:
             if orchestrator and hasattr(orchestrator, 'statistics'):
                 stats = orchestrator.statistics
                 
-                # Update statistics from orchestrator
-                if hasattr(stats, 'zip_files_total'):
+                # Update statistics from orchestrator (if available)
+                if hasattr(stats, 'zip_files_total') and stats.zip_files_total:
                     migration_state['statistics']['zip_files_total'] = stats.zip_files_total
                 if hasattr(stats, 'zip_files_processed_successfully'):
                     migration_state['statistics']['zip_files_processed'] = stats.zip_files_processed_successfully
@@ -230,26 +373,65 @@ def monitor_statistics(orchestrator):
                     migration_state['statistics']['failed_uploads'] = stats.files_upload_failed
                 if hasattr(stats, 'zip_files_corrupted'):
                     migration_state['statistics']['corrupted_zips'] = stats.zip_files_corrupted
-                
-                # Calculate files awaiting upload
-                media_found = migration_state['statistics'].get('media_files_found', 0)
-                media_uploaded = migration_state['statistics'].get('media_files_uploaded', 0)
-                failed_uploads = migration_state['statistics'].get('failed_uploads', 0)
-                awaiting = max(0, media_found - media_uploaded - failed_uploads)
-                migration_state['statistics']['media_files_awaiting_upload'] = awaiting
-                
-                # Update elapsed time
-                if hasattr(stats, 'start_time') and stats.start_time:
-                    elapsed = (time.time() - stats.start_time.timestamp()) if hasattr(stats.start_time, 'timestamp') else 0
-                    migration_state['statistics']['elapsed_time'] = elapsed
-                
-                # Update disk space if orchestrator has base_dir
-                if hasattr(orchestrator, 'base_dir') and orchestrator.base_dir:
+            
+            # Get count of files already uploaded (from tracking file)
+            already_uploaded_count = get_upload_tracking_count(orchestrator)
+            
+            # Calculate files awaiting upload more accurately
+            # This accounts for:
+            # - Files found in current session
+            # - Files uploaded in current session  
+            # - Files already uploaded from previous sessions (in tracking file)
+            # - Files that failed to upload
+            media_found = migration_state['statistics'].get('media_files_found', 0)
+            media_uploaded_this_session = migration_state['statistics'].get('media_files_uploaded', 0)
+            failed_uploads = migration_state['statistics'].get('failed_uploads', 0)
+            
+            # Total uploaded = this session + previously uploaded (from tracking file)
+            total_uploaded = media_uploaded_this_session + already_uploaded_count
+            
+            # Update the displayed uploaded count to show total
+            if already_uploaded_count > 0:
+                migration_state['statistics']['media_files_uploaded_total'] = total_uploaded
+                migration_state['statistics']['media_files_uploaded_this_session'] = media_uploaded_this_session
+                migration_state['statistics']['media_files_uploaded_previous'] = already_uploaded_count
+            
+            # Awaiting = found - total_uploaded - failed
+            # But we should only count files found in THIS session, not previous
+            # Actually, media_files_found is cumulative across all processed zips
+            # So: awaiting = (found - already_uploaded) - uploaded_this_session - failed
+            awaiting = max(0, media_found - total_uploaded - failed_uploads)
+            migration_state['statistics']['media_files_awaiting_upload'] = awaiting
+            
+            # Update elapsed time
+            start_time = migration_state['statistics'].get('start_time')
+            if start_time:
+                elapsed = time.time() - start_time
+                migration_state['statistics']['elapsed_time'] = elapsed
+            
+            # Check if we're still actively processing (heartbeat mechanism)
+            # If last update was recent, keep status as running
+            last_update = migration_state['progress'].get('last_update_time')
+            if last_update:
+                time_since_update = time.time() - last_update
+                # If we haven't seen activity in 30 seconds, but thread is still running,
+                # add a "working" indicator
+                if time_since_update > 30 and time_since_update < 120:
+                    if not migration_state['progress'].get('current_activity'):
+                        migration_state['progress']['current_activity'] = 'Processing... (long-running operation in progress)'
+            
+            # Update disk space every minute (60 seconds)
+            # Check if we should update now (first time or 60+ seconds since last update)
+            last_disk_update = getattr(monitor_statistics, '_last_disk_update', 0)
+            current_time = time.time()
+            if current_time - last_disk_update >= 60:
+                if orchestrator and hasattr(orchestrator, 'base_dir') and orchestrator.base_dir:
                     disk_info = get_disk_space_info(orchestrator.base_dir)
                     migration_state['statistics']['disk_space'] = disk_info
                     socketio.emit('disk_space_update', disk_info)
-                
-                emit_progress_update()
+                monitor_statistics._last_disk_update = current_time
+            
+            emit_progress_update()
             
             time.sleep(2)  # Update every 2 seconds
         except Exception as e:
@@ -424,9 +606,16 @@ def get_status():
             disk_space_info = get_disk_space_info(orchestrator.base_dir)
             migration_state['statistics']['disk_space'] = disk_space_info
     
+    # Ensure progress includes all fields
+    progress = migration_state.get('progress', {})
+    if 'current_activity' not in progress:
+        progress['current_activity'] = None
+    if 'last_update_time' not in progress:
+        progress['last_update_time'] = None
+    
     return jsonify({
         'status': migration_state['status'],
-        'progress': migration_state['progress'],
+        'progress': progress,
         'statistics': migration_state['statistics'],
         'error': migration_state['error'],
         'log_level': migration_state.get('log_level', 'INFO'),
@@ -497,7 +686,9 @@ def start_migration():
         'current': 0,
         'total': 0,
         'percentage': 0,
-        'message': ''
+        'message': '',
+        'current_activity': None,
+        'last_update_time': None
     }
     migration_state['statistics'] = {
         'zip_files_total': 0,

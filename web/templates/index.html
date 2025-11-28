@@ -60,6 +60,15 @@
                             Idle
                         </span>
                     </div>
+                    <div id="status-help-text" class="text-xs text-gray-500 mt-2 hidden">
+                        <p><strong>Status meanings:</strong></p>
+                        <ul class="list-disc list-inside mt-1 space-y-0.5">
+                            <li><strong>Idle:</strong> Migration is not running, or waiting between operations</li>
+                            <li><strong>Running:</strong> Migration is actively processing files</li>
+                            <li><strong>Paused:</strong> Waiting for your action (e.g., retry failed uploads)</li>
+                        </ul>
+                        <p class="mt-2 text-gray-600">Even when status shows "Idle", the process may still be working on long operations like unzipping large files. Check the "Current Activity" section below for details.</p>
+                    </div>
                 </div>
             </div>
         </header>
@@ -81,6 +90,21 @@
                             </div>
                         </div>
                         <p class="text-sm text-gray-600" id="progress-message">Ready to start migration</p>
+                        <div id="current-activity-section" class="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-lg hidden">
+                            <div class="flex items-start space-x-2">
+                                <svg class="animate-spin h-5 w-5 text-blue-600 mt-0.5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                </svg>
+                                <div class="flex-1">
+                                    <p class="text-sm font-medium text-blue-900">Current Activity</p>
+                                    <p class="text-sm text-blue-700 mt-1" id="current-activity-text">-</p>
+                                    <p class="text-xs text-blue-600 mt-2">
+                                        <span id="status-explanation">The process is working. Status updates may be delayed during long operations like unzipping large files.</span>
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
                         <div class="mt-4 flex space-x-2" id="control-buttons">
                             <button id="start-btn" onclick="startMigration()" class="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors font-medium">
                                 Start Migration
