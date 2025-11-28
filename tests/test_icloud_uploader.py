@@ -6,8 +6,23 @@ from unittest.mock import Mock, patch, MagicMock
 
 import pytest
 
+# Check if PhotoKit is available (optional dependency)
+try:
+    from Photos import PHPhotoLibrary
+    PHOTOKIT_AVAILABLE = True
+except ImportError:
+    PHOTOKIT_AVAILABLE = False
+
 from exceptions import AuthenticationError, UploadError
-from icloud_uploader import iCloudUploader, iCloudPhotosSyncUploader
+from icloud_uploader import iCloudUploader
+
+# Import PhotoKit uploader - may not be available if pyobjc-framework-Photos isn't installed
+PHOTOS_SYNC_UPLOADER_AVAILABLE = True
+try:
+    from icloud_uploader import iCloudPhotosSyncUploader
+except (ImportError, RuntimeError, AttributeError):
+    PHOTOS_SYNC_UPLOADER_AVAILABLE = False
+    iCloudPhotosSyncUploader = None  # Will be skipped in tests
 
 
 class TestICloudUploader:
@@ -66,6 +81,8 @@ class TestICloudUploader:
 class TestICloudPhotosSyncUploader:
     """Test cases for iCloudPhotosSyncUploader class (PhotoKit-based)."""
     
+    @pytest.mark.skipif(not PHOTOS_SYNC_UPLOADER_AVAILABLE, reason="iCloudPhotosSyncUploader not available")
+    @pytest.mark.skipif(not PHOTOKIT_AVAILABLE, reason="PhotoKit framework not available")
     @patch('icloud_uploader.platform.system')
     @patch('icloud_uploader.PHPhotoLibrary')
     def test_initialization_macos(self, mock_library, mock_platform):
@@ -80,6 +97,7 @@ class TestICloudPhotosSyncUploader:
         
         assert uploader is not None
     
+    @pytest.mark.skipif(not PHOTOS_SYNC_UPLOADER_AVAILABLE, reason="iCloudPhotosSyncUploader not available")
     @patch('icloud_uploader.platform.system')
     def test_initialization_non_macos(self, mock_platform):
         """Test that initialization fails on non-macOS."""
@@ -88,6 +106,8 @@ class TestICloudPhotosSyncUploader:
         with pytest.raises(RuntimeError, match="macOS"):
             iCloudPhotosSyncUploader()
     
+    @pytest.mark.skipif(not PHOTOS_SYNC_UPLOADER_AVAILABLE, reason="iCloudPhotosSyncUploader not available")
+    @pytest.mark.skipif(not PHOTOKIT_AVAILABLE, reason="PhotoKit framework not available")
     @patch('icloud_uploader.platform.system')
     @patch('icloud_uploader.PHPhotoLibrary')
     def test_upload_file_image(self, mock_library, mock_platform, tmp_path):
