@@ -1070,3 +1070,154 @@ async function skipCorruptedZip() {
     hideCorruptedZipModal();
 }
 
+// ========================================================================
+// Config Editor Functions
+// ========================================================================
+
+function toggleConfigEditor() {
+    const editor = document.getElementById('config-editor');
+    const toggleText = document.getElementById('config-toggle-text');
+    
+    if (editor.classList.contains('hidden')) {
+        editor.classList.remove('hidden');
+        toggleText.textContent = '▲ Hide Config';
+        loadConfigForEditing();
+    } else {
+        editor.classList.add('hidden');
+        toggleText.textContent = '▼ Edit Config';
+    }
+}
+
+function togglePasswordVisibility() {
+    const passwordInput = document.getElementById('config-icloud-password');
+    const eyeIcon = document.getElementById('password-eye-icon');
+    
+    if (passwordInput.type === 'password') {
+        passwordInput.type = 'text';
+        // Change to "eye-off" icon
+        eyeIcon.innerHTML = `
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"></path>
+        `;
+    } else {
+        passwordInput.type = 'password';
+        // Change to "eye" icon
+        eyeIcon.innerHTML = `
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+        `;
+    }
+}
+
+async function loadConfigForEditing() {
+    const configPath = elements.configPathInput.value || 'config.yaml';
+    
+    try {
+        const response = await fetch(`/api/config?config_path=${encodeURIComponent(configPath)}`);
+        if (!response.ok) {
+            throw new Error('Failed to load configuration');
+        }
+        
+        const config = await response.json();
+        
+        // Populate form fields
+        document.getElementById('config-google-creds').value = config.google_drive?.credentials_file || './credentials.json';
+        document.getElementById('config-icloud-email').value = config.icloud?.apple_id || '';
+        document.getElementById('config-icloud-password').value = config.icloud?.password || '';
+        document.getElementById('config-base-dir').value = config.processing?.base_dir || '';
+        document.getElementById('config-max-downloads').value = config.processing?.max_parallel_downloads || 3;
+        document.getElementById('config-max-uploads').value = config.processing?.max_parallel_uploads || 5;
+        document.getElementById('config-verify-upload').checked = config.processing?.verify_after_upload !== false;
+        document.getElementById('config-cleanup').checked = config.processing?.cleanup_after_processing !== false;
+        document.getElementById('config-preserve-dates').checked = config.processing?.preserve_original_dates !== false;
+        document.getElementById('config-log-level').value = config.logging?.level || 'INFO';
+        document.getElementById('config-log-file').value = config.logging?.file || 'migration.log';
+        
+        addLog('info', 'Configuration loaded into editor');
+    } catch (error) {
+        showError(`Failed to load configuration: ${error.message}`);
+    }
+}
+
+async function saveConfig() {
+    const configPath = elements.configPathInput.value || 'config.yaml';
+    
+    // Build config object from form
+    const config = {
+        google_drive: {
+            credentials_file: document.getElementById('config-google-creds').value
+        },
+        icloud: {
+            apple_id: document.getElementById('config-icloud-email').value,
+            password: document.getElementById('config-icloud-password').value
+        },
+        processing: {
+            base_dir: document.getElementById('config-base-dir').value,
+            zip_dir: 'zips',
+            extract_dir: 'extracted',
+            processed_dir: 'processed',
+            max_parallel_downloads: parseInt(document.getElementById('config-max-downloads').value) || 3,
+            max_parallel_uploads: parseInt(document.getElementById('config-max-uploads').value) || 5,
+            verify_after_upload: document.getElementById('config-verify-upload').checked,
+            cleanup_after_processing: document.getElementById('config-cleanup').checked,
+            preserve_original_dates: document.getElementById('config-preserve-dates').checked
+        },
+        logging: {
+            level: document.getElementById('config-log-level').value,
+            file: document.getElementById('config-log-file').value,
+            max_bytes: 10485760,
+            backup_count: 5
+        }
+    };
+    
+    try {
+        const response = await fetch('/api/config', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                config_path: configPath,
+                config: config
+            })
+        });
+        
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Failed to save configuration');
+        }
+        
+        const result = await response.json();
+        addLog('success', result.message || 'Configuration saved successfully');
+        
+        // Show success notification
+        showNotification('Configuration saved! Restart the migration for changes to take effect.', 'success');
+        
+    } catch (error) {
+        showError(`Failed to save configuration: ${error.message}`);
+    }
+}
+
+function showNotification(message, type = 'info') {
+    // Create notification element
+    const notification = document.createElement('div');
+    notification.className = `fixed top-4 right-4 px-6 py-3 rounded-lg shadow-lg text-white z-50 animate-slide-in`;
+    
+    if (type === 'success') {
+        notification.className += ' bg-green-500';
+    } else if (type === 'error') {
+        notification.className += ' bg-red-500';
+    } else {
+        notification.className += ' bg-blue-500';
+    }
+    
+    notification.textContent = message;
+    document.body.appendChild(notification);
+    
+    // Remove after 3 seconds
+    setTimeout(() => {
+        notification.style.opacity = '0';
+        notification.style.transition = 'opacity 0.3s';
+        setTimeout(() => notification.remove(), 300);
+    }, 3000);
+}
+
