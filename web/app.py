@@ -14,10 +14,14 @@ from typing import Dict, Optional, Any, List
 from flask import Flask, render_template, jsonify, request, send_from_directory
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
+from flask_wtf.csrf import CSRFProtect
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 import yaml
 
 from google_photos_icloud_migration.cli.main import MigrationOrchestrator, MigrationStoppedException
 from google_photos_icloud_migration.exceptions import ConfigurationError, CorruptedZipException
+from google_photos_icloud_migration.utils.security import validate_config_path, validate_file_path
 
 logger = logging.getLogger(__name__)
 
@@ -25,9 +29,43 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__, 
             template_folder='templates',
             static_folder='static')
-app.config['SECRET_KEY'] = os.urandom(24)
-CORS(app)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+# Use persistent secret key from environment, fallback to random (warn in production)
+app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET_KEY', os.urandom(24).hex())
+if not os.getenv('FLASK_SECRET_KEY'):
+    logger.warning("FLASK_SECRET_KEY not set - using random key (sessions will be invalid on restart)")
+
+# CSRF Protection
+csrf = CSRFProtect(app)
+# Exempt Socket.IO from CSRF (handled separately via origin checking)
+csrf.exempt(lambda: request.path.startswith('/socket.io/'))
+
+# Rate Limiting
+limiter = Limiter(
+    app=app,
+    key_func=get_remote_address,
+    default_limits=["200 per day", "50 per hour"],
+    storage_uri="memory://",  # In-memory storage (use Redis for production)
+    headers_enabled=True
+)
+
+# Restrict CORS to localhost only for security
+CORS(app, resources={
+    r"/api/*": {
+        "origins": ["http://localhost:5001", "http://127.0.0.1:5001", "http://localhost:5000", "http://127.0.0.1:5000"],
+        "methods": ["GET", "POST"],
+        "allow_headers": ["Content-Type", "X-CSRFToken", "X-API-Key"]
+    },
+    r"/socket.io/*": {
+        "origins": ["http://localhost:5001", "http://127.0.0.1:5001", "http://localhost:5000", "http://127.0.0.1:5000"]
+    }
+})
+
+socketio = SocketIO(app, cors_allowed_origins=["http://localhost:5001", "http://127.0.0.1:5001", "http://localhost:5000", "http://127.0.0.1:5000"], async_mode='eventlet')
+
+# API Key for authentication (optional but recommended)
+API_KEY = os.getenv('WEB_API_KEY', None)
+if not API_KEY:
+    logger.warning("WEB_API_KEY not set - API endpoints are unprotected. Set WEB_API_KEY environment variable for production.")
 
 # Global state
 migration_state = {
@@ -724,6 +762,49 @@ def run_migration(config_path: str, use_sync_method: bool = False, log_level: st
         migration_state['web_handler'] = None
 
 
+# API Key authentication decorator
+def require_api_key(f):
+    """Decorator to require API key for API endpoints."""
+    from functools import wraps
+    
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        # Skip API key check if not configured (for development)
+        if API_KEY is None:
+            return f(*args, **kwargs)
+        
+        # Check for API key in header or query parameter
+        provided_key = request.headers.get('X-API-Key') or request.args.get('api_key')
+        if provided_key != API_KEY:
+            logger.warning(f"Unauthorized API access attempt from {request.remote_addr}")
+            return jsonify({'error': 'Unauthorized - Invalid or missing API key'}), 401
+        return f(*args, **kwargs)
+    return decorated_function
+
+
+# Global error handlers
+@app.errorhandler(500)
+def handle_500_error(e):
+    """Handle 500 errors without exposing internal details."""
+    logger.exception("Internal server error")
+    return jsonify({'error': 'An internal server error occurred'}), 500
+
+@app.errorhandler(404)
+def handle_404_error(e):
+    """Handle 404 errors."""
+    return jsonify({'error': 'Resource not found'}), 404
+
+@app.errorhandler(429)
+def handle_429_error(e):
+    """Handle rate limit errors."""
+    return jsonify({'error': 'Rate limit exceeded. Please try again later.'}), 429
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    """Handle all unhandled exceptions."""
+    logger.exception("Unhandled exception")
+    return jsonify({'error': 'An error occurred'}), 500
+
 @app.route('/')
 def index():
     """Serve the main UI page."""
@@ -731,38 +812,53 @@ def index():
 
 
 @app.route('/api/config', methods=['GET'])
+@limiter.limit("10 per minute")
+@require_api_key
 def get_config():
     """Get current configuration."""
-    config_path = request.args.get('config_path', 'config.yaml')
-    config_file = Path(config_path)
-    
-    if not config_file.exists():
-        return jsonify({'error': 'Configuration file not found'}), 404
-    
     try:
+        config_path = request.args.get('config_path', 'config.yaml')
+        config_file = validate_config_path(config_path)
+        
+        if not config_file.exists():
+            return jsonify({'error': 'Configuration file not found'}), 404
+        
         with open(config_file, 'r') as f:
             config = yaml.safe_load(f)
         return jsonify(config)
+    except ValueError as e:
+        logger.warning(f"Invalid config path attempt: {e}")
+        return jsonify({'error': 'Invalid configuration path'}), 400
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        logger.exception("Error loading config")
+        return jsonify({'error': 'An error occurred loading configuration'}), 500
 
 
 @app.route('/api/config', methods=['POST'])
+@limiter.limit("5 per minute")
+@require_api_key
 def save_config():
     """Save configuration."""
-    config_path = request.json.get('config_path', 'config.yaml')
-    config_data = request.json.get('config', {})
-    
     try:
-        config_file = Path(config_path)
+        config_path = request.json.get('config_path', 'config.yaml')
+        config_data = request.json.get('config', {})
+        
+        config_file = validate_config_path(config_path)
+        
         with open(config_file, 'w') as f:
             yaml.dump(config_data, f, default_flow_style=False, sort_keys=False)
         return jsonify({'success': True, 'message': 'Configuration saved'})
+    except ValueError as e:
+        logger.warning(f"Invalid config path attempt: {e}")
+        return jsonify({'error': 'Invalid configuration path'}), 400
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        logger.exception("Error saving config")
+        return jsonify({'error': 'An error occurred saving configuration'}), 500
 
 
 @app.route('/api/status', methods=['GET'])
+@limiter.limit("30 per minute")
+@require_api_key
 def get_status():
     """Get current migration status."""
     # Update disk space if orchestrator is available
@@ -791,40 +887,50 @@ def get_status():
 
 
 @app.route('/api/disk-space', methods=['GET'])
+@limiter.limit("10 per minute")
+@require_api_key
 def get_disk_space():
     """Get disk space information."""
-    config_path = request.args.get('config_path', 'config.yaml')
-    base_dir = request.args.get('base_dir', None)
-    
-    # Try to get base_dir from config or orchestrator
-    if not base_dir:
-        if migration_state.get('orchestrator') and hasattr(migration_state['orchestrator'], 'base_dir'):
-            base_dir = str(migration_state['orchestrator'].base_dir)
-        else:
-            # Try to load from config file
-            try:
-                config_file = Path(config_path)
-                if config_file.exists():
-                    with open(config_file, 'r') as f:
-                        config = yaml.safe_load(f)
-                    base_dir = config.get('processing', {}).get('base_dir')
-            except Exception as e:
-                logger.warning(f"Could not load config to get base_dir: {e}")
-    
-    if not base_dir:
-        # Default to checking current directory
-        base_dir = '.'
-    
-    disk_info = get_disk_space_info(Path(base_dir))
-    
-    # Update migration state if orchestrator is available
-    if migration_state.get('orchestrator'):
-        migration_state['statistics']['disk_space'] = disk_info
-    
-    return jsonify(disk_info)
+    try:
+        config_path = request.args.get('config_path', 'config.yaml')
+        base_dir = request.args.get('base_dir', None)
+        
+        # Try to get base_dir from config or orchestrator
+        if not base_dir:
+            if migration_state.get('orchestrator') and hasattr(migration_state['orchestrator'], 'base_dir'):
+                base_dir = str(migration_state['orchestrator'].base_dir)
+            else:
+                # Try to load from config file
+                try:
+                    config_file = validate_config_path(config_path)
+                    if config_file.exists():
+                        with open(config_file, 'r') as f:
+                            config = yaml.safe_load(f)
+                        base_dir = config.get('processing', {}).get('base_dir')
+                except Exception as e:
+                    logger.warning(f"Could not load config to get base_dir: {e}")
+        
+        if not base_dir:
+            # Default to checking current directory
+            base_dir = '.'
+        
+        # Validate base_dir path
+        base_path = Path(base_dir).resolve()
+        disk_info = get_disk_space_info(base_path)
+        
+        # Update migration state if orchestrator is available
+        if migration_state.get('orchestrator'):
+            migration_state['statistics']['disk_space'] = disk_info
+        
+        return jsonify(disk_info)
+    except Exception as e:
+        logger.exception("Error getting disk space")
+        return jsonify({'error': 'An error occurred getting disk space information'}), 500
 
 
 @app.route('/api/migration/start', methods=['POST'])
+@limiter.limit("3 per hour")
+@require_api_key
 def start_migration():
     """Start migration."""
     if migration_state['status'] == 'running':
@@ -835,8 +941,14 @@ def start_migration():
     use_sync_method = data.get('use_sync_method', False)
     log_level = data.get('log_level', 'DEBUG')
     
-    if not Path(config_path).exists():
-        return jsonify({'error': f'Configuration file not found: {config_path}'}), 404
+    try:
+        config_file = validate_config_path(config_path)
+        if not config_file.exists():
+            logger.warning(f"Config file not found: {config_path}")
+            return jsonify({'error': 'Configuration file not found'}), 404
+    except ValueError as e:
+        logger.warning(f"Invalid config path attempt: {e}")
+        return jsonify({'error': 'Invalid configuration path'}), 400
     
     # Validate log level
     valid_levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR']
@@ -883,6 +995,8 @@ def start_migration():
 
 
 @app.route('/api/migration/stop', methods=['POST'])
+@limiter.limit("10 per hour")
+@require_api_key
 def stop_migration():
     """Stop migration."""
     if migration_state['status'] != 'running':
@@ -897,6 +1011,8 @@ def stop_migration():
 
 
 @app.route('/api/migration/log-level', methods=['POST'])
+@limiter.limit("10 per minute")
+@require_api_key
 def update_log_level():
     """Update log level for web UI logging."""
     data = request.json or {}
@@ -926,6 +1042,8 @@ def update_log_level():
 
 
 @app.route('/api/migration/proceed-after-retries', methods=['POST'])
+@limiter.limit("10 per hour")
+@require_api_key
 def proceed_after_retries():
     """Signal to proceed with cleanup after retrying failed uploads."""
     if migration_state['status'] != 'paused':
@@ -938,6 +1056,8 @@ def proceed_after_retries():
 
 
 @app.route('/api/server/status', methods=['GET'])
+@limiter.limit("30 per minute")
+@require_api_key
 def get_server_status():
     """Get web server status and health information."""
     import os
@@ -976,15 +1096,17 @@ def get_server_status():
             'port': 5001
         })
     except Exception as e:
-        logger.error(f"Error getting server status: {e}")
+        logger.exception(f"Error getting server status: {e}")
         return jsonify({
             'success': False,
             'server_status': 'unknown',
-            'error': str(e)
+            'error': 'An error occurred getting server status'
         }), 500
 
 
 @app.route('/api/server/restart-instructions', methods=['GET'])
+@limiter.limit("10 per minute")
+@require_api_key
 def get_restart_instructions():
     """Get instructions for restarting the web server."""
     import platform
@@ -1039,12 +1161,16 @@ def get_restart_instructions():
 
 
 @app.route('/api/statistics', methods=['GET'])
+@limiter.limit("30 per minute")
+@require_api_key
 def get_statistics():
     """Get migration statistics."""
     return jsonify(migration_state['statistics'])
 
 
 @app.route('/api/corrupted-zip/skip', methods=['POST'])
+@limiter.limit("10 per hour")
+@require_api_key
 def skip_corrupted_zip():
     """Skip a corrupted zip file and continue migration."""
     data = request.json or {}
@@ -1073,6 +1199,8 @@ def skip_corrupted_zip():
 
 
 @app.route('/api/failed-uploads', methods=['GET'])
+@limiter.limit("20 per minute")
+@require_api_key
 def get_failed_uploads():
     """Get list of failed uploads."""
     if not migration_state['orchestrator']:
@@ -1223,6 +1351,8 @@ def _retry_failed_uploads(files_to_retry: Optional[List[str]] = None, use_sync_m
 
 
 @app.route('/api/failed-uploads/retry', methods=['POST'])
+@limiter.limit("5 per hour")
+@require_api_key
 def retry_failed_uploads():
     """Retry all or specific failed uploads."""
     if migration_state['status'] == 'running':
@@ -1242,6 +1372,8 @@ def retry_failed_uploads():
 
 
 @app.route('/api/failed-uploads/retry-single', methods=['POST'])
+@limiter.limit("20 per hour")
+@require_api_key
 def retry_single_failed_upload():
     """Retry a single failed upload."""
     if migration_state['status'] == 'running':
@@ -1264,6 +1396,8 @@ def retry_single_failed_upload():
 
 
 @app.route('/api/corrupted-zip/redownload', methods=['POST'])
+@limiter.limit("10 per hour")
+@require_api_key
 def redownload_corrupted_zip():
     """Redownload a corrupted zip file."""
     data = request.json or {}
@@ -1299,12 +1433,19 @@ def redownload_corrupted_zip():
         }
         
         # Get zip directory from config
-        base_dir = Path(config['processing']['base_dir'])
+        base_dir = Path(config['processing']['base_dir']).resolve()
         zip_dir = base_dir / config['processing'].get('zip_dir', 'zips')
         zip_dir.mkdir(parents=True, exist_ok=True)
         
+        # Validate file_name to prevent path traversal
+        from google_photos_icloud_migration.utils.security import sanitize_filename
+        safe_file_name = sanitize_filename(file_name)
+        
         # Delete corrupted file if it exists
-        zip_path = zip_dir / file_name
+        zip_path = zip_dir / safe_file_name
+        # Double-check path is within zip_dir
+        if not str(zip_path.resolve()).startswith(str(zip_dir.resolve())):
+            raise ValueError("Invalid file path")
         if zip_path.exists():
             zip_path.unlink()
             logger.info(f"Deleted corrupted file: {zip_path}")
@@ -1352,5 +1493,10 @@ def create_app():
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
-    socketio.run(app, host='0.0.0.0', port=5000, debug=True)
+    # Only enable debug mode if explicitly set in environment
+    # NEVER enable debug in production!
+    debug_mode = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
+    if debug_mode:
+        logger.warning("⚠️  DEBUG MODE ENABLED - Do not use in production!")
+    socketio.run(app, host='0.0.0.0', port=5000, debug=debug_mode)
 

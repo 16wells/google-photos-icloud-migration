@@ -29,6 +29,8 @@ from album_parser import AlbumParser
 from icloud_uploader import iCloudUploader, iCloudPhotosSyncUploader
 from migration_statistics import MigrationStatistics
 from report_generator import ReportGenerator
+from exceptions import ExtractionError
+from google_photos_icloud_migration.utils.state_manager import StateManager, ZipProcessingState
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +78,9 @@ class MigrationOrchestrator:
         
         # Initialize iCloud uploader (will be set up later)
         self.icloud_uploader = None
+        
+        # Initialize state manager for tracking completed zips
+        self.state_manager = StateManager(self.base_dir)
         
         # Failed uploads tracking
         self.failed_uploads_file = self.base_dir / 'failed_uploads.json'
@@ -741,8 +746,8 @@ class MigrationOrchestrator:
             try:
                 extracted_dir = self.extractor.extract_zip(zip_path)
                 self.statistics.record_zip_extraction(zip_path.name, success=True)
-            except (zipfile.BadZipFile, RuntimeError) as e:
-                # Handle corrupted zip file (BadZipFile from extractor, RuntimeError from validation)
+            except (zipfile.BadZipFile, ExtractionError, RuntimeError) as e:
+                # Handle corrupted zip file
                 error_msg = str(e)
                 logger.error(f"❌ Corrupted zip file detected: {zip_path.name}")
                 logger.error(f"   Error: {error_msg}")
@@ -762,8 +767,15 @@ class MigrationOrchestrator:
                     }
                     self._save_corrupted_zip(minimal_info, zip_path, error_msg)
                 
-                logger.warning(f"⚠️  Skipping corrupted zip file: {zip_path.name}")
-                logger.warning(f"   This file has been saved to corrupted_zips.json for later re-download")
+                # Delete corrupted file so it can be re-downloaded
+                logger.warning(f"⚠️  Deleting corrupted zip file: {zip_path.name}")
+                logger.warning(f"   This file has been saved to corrupted_zips.json and will be re-downloaded")
+                try:
+                    zip_path.unlink()
+                    logger.info(f"   ✓ Deleted corrupted file: {zip_path.name}")
+                except Exception as delete_error:
+                    logger.error(f"   Could not delete corrupted file: {delete_error}")
+                
                 return False
             
             # Process metadata for this zip
@@ -890,14 +902,31 @@ class MigrationOrchestrator:
             logger.info(f"Uploaded {successful}/{len(upload_results)} files from {zip_path.name}")
             
             # Save failed uploads for retry
+            failed_files = []
             if failed_count > 0:
                 failed_files = [str(path) for path, success in upload_results.items() if not success]
                 self._save_failed_uploads(failed_files, file_to_album)
                 logger.warning(f"⚠️  {failed_count} files from {zip_path.name} failed to upload")
                 logger.warning(f"Failed uploads saved to: {self.failed_uploads_file}")
             
-            # Cleanup extracted files for this zip (save disk space)
+            # Cleanup successfully uploaded processed files (save disk space)
+            # Keep failed uploads for retry
             import shutil
+            cleaned_count = 0
+            for file_path, success in upload_results.items():
+                # Only delete processed files (not original extracted files)
+                # and only if upload was successful
+                if success and file_path.exists() and str(file_path).startswith(str(processed_dir)):
+                    try:
+                        file_path.unlink()
+                        cleaned_count += 1
+                    except Exception as e:
+                        logger.warning(f"Could not delete processed file {file_path.name}: {e}")
+            
+            if cleaned_count > 0:
+                logger.info(f"✓ Cleaned up {cleaned_count} successfully uploaded processed files")
+            
+            # Cleanup extracted files for this zip (save disk space)
             if extracted_dir.exists():
                 logger.info(f"Cleaning up extracted files for {zip_path.name}")
                 shutil.rmtree(extracted_dir)
@@ -976,6 +1005,11 @@ class MigrationOrchestrator:
             except Exception as e:
                 logger.warning(f"  Could not delete corrupted zips file: {e}")
         
+        # Clear state manager (since we're restarting from scratch)
+        logger.info("Clearing state manager...")
+        self.state_manager.clear_state()
+        logger.info("  ✓ Cleared state manager")
+        
         # Reset state flags
         self._skip_continue_prompts = False
         self.ignore_all_verification_failures = False
@@ -987,7 +1021,7 @@ class MigrationOrchestrator:
     
     def _find_existing_zips(self, zip_dir: Path, zip_file_list: List[dict]) -> List[Path]:
         """
-        Find zip files that are already downloaded locally.
+        Find zip files that are already downloaded locally and validate them.
         
         Args:
             zip_dir: Directory containing zip files
@@ -999,15 +1033,82 @@ class MigrationOrchestrator:
         existing_zips = []
         zip_dir.mkdir(parents=True, exist_ok=True)
         
-        # Create a set of expected zip file names for quick lookup
-        expected_names = {file_info['name'] for file_info in zip_file_list}
+        # Create a dict mapping file names to file_info for quick lookup and size validation
+        expected_files = {file_info['name']: file_info for file_info in zip_file_list}
         
-        # Find matching zip files in the directory
+        # Find matching zip files in the directory and validate them
         for zip_file in zip_dir.glob("*.zip"):
-            if zip_file.name in expected_names:
-                existing_zips.append(zip_file)
+            if zip_file.name in expected_files:
+                file_info = expected_files[zip_file.name]
+                expected_size = None
+                if 'size' in file_info:
+                    try:
+                        expected_size = int(file_info['size'])
+                    except (ValueError, TypeError):
+                        pass
+                
+                # Validate that this is a valid zip file
+                if self._validate_zip_file(zip_file, expected_size=expected_size):
+                    existing_zips.append(zip_file)
+                else:
+                    # File is corrupted - delete it so it will be re-downloaded
+                    logger.warning(f"⚠️  Found corrupted/invalid zip file: {zip_file.name}")
+                    logger.warning(f"   Deleting corrupted file - it will be re-downloaded")
+                    try:
+                        zip_file.unlink()
+                        logger.info(f"   ✓ Deleted corrupted file: {zip_file.name}")
+                    except Exception as e:
+                        logger.error(f"   Could not delete corrupted file {zip_file.name}: {e}")
         
         return sorted(existing_zips)  # Sort for consistent processing order
+    
+    def _validate_zip_file(self, zip_path: Path, expected_size: Optional[int] = None) -> bool:
+        """
+        Validate that a zip file is valid and complete.
+        
+        Args:
+            zip_path: Path to zip file to validate
+            expected_size: Optional expected file size in bytes
+        
+        Returns:
+            True if valid, False if corrupted or incomplete
+        """
+        # Check if file exists
+        if not zip_path.exists():
+            return False
+        
+        # Check file size if expected size is provided
+        actual_size = zip_path.stat().st_size
+        if expected_size:
+            # If file is smaller than expected, it's likely incomplete
+            if actual_size < expected_size:
+                logger.warning(
+                    f"File {zip_path.name} is smaller than expected: "
+                    f"{actual_size / (1024*1024):.1f} MB vs {expected_size / (1024*1024):.1f} MB"
+                )
+                return False
+            # If file is significantly larger, it might be corrupted (but allow some tolerance)
+            elif actual_size > expected_size * 1.1:  # 10% tolerance
+                logger.warning(
+                    f"File {zip_path.name} is significantly larger than expected: "
+                    f"{actual_size / (1024*1024):.1f} MB vs {expected_size / (1024*1024):.1f} MB"
+                )
+        
+        # Try to open and validate the zip file
+        try:
+            with zipfile.ZipFile(zip_path, 'r') as test_zip:
+                # Test zip integrity
+                test_zip.testzip()
+            return True
+        except zipfile.BadZipFile:
+            logger.warning(f"File {zip_path.name} is not a valid zip file")
+            return False
+        except (OSError, IOError) as e:
+            logger.warning(f"Error accessing {zip_path.name}: {e}")
+            return False
+        except Exception as e:
+            logger.warning(f"Unexpected error validating {zip_path.name}: {e}")
+            return False
     
     def run(self, use_sync_method: bool = False, retry_failed: bool = False):
         """
@@ -1048,7 +1149,25 @@ class MigrationOrchestrator:
                 self._generate_final_report(0, 0)
                 return
             
+            # Sort zip files by name for consistent processing order
+            zip_file_list = sorted(zip_file_list, key=lambda x: x['name'])
+            
             self.statistics.zip_files_total = len(zip_file_list)
+            
+            # Check state manager for already completed zips
+            completed_zips = set()
+            for zip_info in zip_file_list:
+                zip_name = zip_info['name']
+                if self.state_manager.is_zip_complete(zip_name):
+                    completed_zips.add(zip_name)
+            
+            if completed_zips:
+                logger.info("")
+                logger.info("=" * 60)
+                logger.info(f"Found {len(completed_zips)} already-completed zip files in state")
+                logger.info("These will be skipped")
+                logger.info("=" * 60)
+                logger.info("")
             
             # Check for already-downloaded zip files
             existing_zips = self._find_existing_zips(zip_dir, zip_file_list)
@@ -1083,6 +1202,15 @@ class MigrationOrchestrator:
             
             # FIRST: Process already-downloaded zip files to free up space
             for existing_zip in existing_zips:
+                # Skip if already completed according to state
+                if self.state_manager.is_zip_complete(existing_zip.name):
+                    logger.info(f"Skipping {existing_zip.name} - already completed (marked in state)")
+                    # Delete the zip file if it exists but is already completed
+                    if existing_zip.exists():
+                        logger.info(f"Deleting already-completed zip file: {existing_zip.name}")
+                        existing_zip.unlink()
+                    continue
+                
                 processed_count += 1
                 try:
                     logger.info("=" * 60)
@@ -1095,6 +1223,9 @@ class MigrationOrchestrator:
                     # Process this zip file
                     if self.process_single_zip(existing_zip, processed_count, total_zips, use_sync_method, file_info=file_info):
                         successful += 1
+                        
+                        # Mark as completed in state manager
+                        self.state_manager.mark_zip_uploaded(existing_zip.name)
                         
                         # Cleanup zip file after successful processing to free up space
                         logger.info(f"Deleting zip file to free up disk space: {existing_zip.name}")
@@ -1131,9 +1262,15 @@ class MigrationOrchestrator:
             
             # THEN: Download and process remaining zip files
             for file_info in zip_file_list:
-                zip_file_path = zip_dir / file_info['name']
+                zip_name = file_info['name']
+                zip_file_path = zip_dir / zip_name
                 
-                # Skip if we already processed this file (or it failed)
+                # Skip if already completed according to state
+                if self.state_manager.is_zip_complete(zip_name):
+                    logger.debug(f"Skipping {zip_name} - already completed (marked in state)")
+                    continue
+                
+                # Skip if we already downloaded this file (but haven't processed it yet)
                 if zip_file_path.exists():
                     continue
                 
@@ -1160,6 +1297,9 @@ class MigrationOrchestrator:
                     # Process this zip file (file_info is already available)
                     if self.process_single_zip(zip_file, processed_count, total_zips, use_sync_method, file_info=file_info):
                         successful += 1
+                        
+                        # Mark as completed in state manager
+                        self.state_manager.mark_zip_uploaded(zip_file.name)
                         
                         # Cleanup zip file after successful processing to free up space
                         logger.info(f"Deleting zip file to free up disk space: {zip_file.name}")

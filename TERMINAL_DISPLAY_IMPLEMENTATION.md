@@ -129,3 +129,8 @@ The `isatty()` method in `TerminalStreamCapture` returns `True`, which makes tqd
 - Terminal preserves exact terminal experience users are familiar with
 - No changes needed to migration code - works automatically!
 
+
+
+
+
+

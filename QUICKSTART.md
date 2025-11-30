@@ -62,6 +62,13 @@ processing:
   base_dir: "/tmp/google-photos-migration"
 ```
 
+**Optional:** For better security, store sensitive credentials (passwords, API tokens) in a `.env` file:
+```bash
+cp .env.example .env
+# Edit .env and add your credentials
+```
+Environment variables in `.env` take precedence over `config.yaml`. See [AUTHENTICATION_GUIDE.md](AUTHENTICATION_GUIDE.md) for details.
+
 ## First Run
 
 1. **Download phase**: Authenticate with Google Drive (browser opens automatically)

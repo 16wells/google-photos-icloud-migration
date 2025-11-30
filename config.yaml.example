@@ -67,12 +67,14 @@ logging:
 
 # Environment Variables (Alternative to config file for sensitive data)
 # Create a .env file in the project directory (never commit it to git!)
+# Copy .env.example to .env and fill in your values
 # Example .env file contents:
 #   ICLOUD_APPLE_ID=your-apple-id@example.com
 #   ICLOUD_PASSWORD=your-password
 #   ICLOUD_2FA_CODE=123456
 #   ICLOUD_2FA_DEVICE_ID=0
 #   GOOGLE_DRIVE_CREDENTIALS_FILE=credentials.json
+#   GITHUB_TOKEN=your_github_token_here  # For scripts/set_github_repo_info.py
 #
 # Environment variables take precedence over config file values for security.
 # This allows you to keep credentials out of version control.

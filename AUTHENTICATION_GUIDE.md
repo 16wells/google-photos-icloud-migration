@@ -113,6 +113,45 @@ The API method uses `pyicloud` library and requires:
 
 **Recommendation:** Use PhotoKit method (`--use-sync`) instead if you're on macOS.
 
+## Environment Variables (.env File)
+
+For better security, you can store sensitive credentials in a `.env` file instead of `config.yaml`. The `.env` file is automatically ignored by git (already in `.gitignore`).
+
+### Setup .env File
+
+1. **Copy the example file:**
+   ```bash
+   cp .env.example .env
+   ```
+
+2. **Edit `.env` and add your credentials:**
+   ```bash
+   # iCloud Configuration
+   ICLOUD_APPLE_ID=your-apple-id@example.com
+   ICLOUD_PASSWORD=your-password
+   ICLOUD_2FA_CODE=123456
+   ICLOUD_2FA_DEVICE_ID=0
+   
+   # Google Drive Configuration
+   GOOGLE_DRIVE_CREDENTIALS_FILE=credentials.json
+   
+   # GitHub Token (for repository management scripts)
+   GITHUB_TOKEN=your_github_token_here
+   ```
+
+3. **Environment variables take precedence** over `config.yaml` values, providing an extra layer of security.
+
+### Supported Environment Variables
+
+- `ICLOUD_APPLE_ID` - Your Apple ID email
+- `ICLOUD_PASSWORD` - Your Apple ID password (for API method only)
+- `ICLOUD_2FA_CODE` - 2FA verification code
+- `ICLOUD_2FA_DEVICE_ID` - Trusted device ID for 2FA
+- `GOOGLE_DRIVE_CREDENTIALS_FILE` - Path to credentials.json
+- `GITHUB_TOKEN` - GitHub personal access token (for scripts like `scripts/set_github_repo_info.py`)
+
+**Note:** The tool automatically loads `.env` files using `python-dotenv` (already included in `requirements.txt`).
+
 ## Security Considerations
 
 ### Google Drive
@@ -133,8 +172,9 @@ The API method uses `pyicloud` library and requires:
 
 **API Method:**
 - ⚠️ Requires Apple ID password
-- ⚠️ Password stored in `config.yaml` (keep private)
+- ⚠️ Password stored in `config.yaml` or `.env` (keep private)
 - ⚠️ 2FA codes may be needed
+- ✅ **Recommendation:** Use `.env` file instead of `config.yaml` for passwords
 
 ## Troubleshooting
 
@@ -198,9 +238,10 @@ Or delete `token.json` to force re-authentication.
 
 1. **Use the setup wizard** for easiest experience
 2. **Use PhotoKit method** (`--use-sync`) on macOS for best security
-3. **Keep `token.json` and `config.yaml` private** (don't commit to git)
-4. **Revoke access** if you stop using the tool
-5. **Use separate Google Cloud project** for production use
+3. **Use `.env` file** for sensitive credentials (GitHub token, passwords, etc.)
+4. **Keep `token.json`, `config.yaml`, and `.env` private** (don't commit to git - `.env` is already gitignored)
+5. **Revoke access** if you stop using the tool
+6. **Use separate Google Cloud project** for production use
 
 ## Summary
 

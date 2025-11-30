@@ -73,8 +73,18 @@ class Extractor:
             # Get list of files to extract
             file_list = zip_ref.namelist()
             
-            # Extract with progress bar
+            # Extract with progress bar and path validation (prevent zip slip)
+            extract_to_resolved = extract_to.resolve()
             for file_info in tqdm(file_list, desc=f"Extracting {zip_path.name}"):
+                # Validate path to prevent zip slip attack
+                target_path = (extract_to_resolved / file_info).resolve()
+                try:
+                    target_path.relative_to(extract_to_resolved)
+                except ValueError:
+                    raise ExtractionError(
+                        f"Invalid path in zip file (potential zip slip attack): {file_info}. "
+                        f"Path resolves outside extraction directory: {target_path}"
+                    )
                 zip_ref.extract(file_info, extract_to)
         
         logger.info(f"Extracted {zip_path.name}")

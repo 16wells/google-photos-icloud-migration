@@ -17,6 +17,7 @@ from googleapiclient.errors import HttpError
 import io
 import logging
 import httplib2
+import requests
 
 from exceptions import DownloadError, AuthenticationError
 
@@ -52,47 +53,77 @@ class DriveDownloader:
         # If there are no (valid) credentials available, let the user log in
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
-            else:
-                flow = InstalledAppFlow.from_client_secrets_file(
-                    self.credentials_file, SCOPES)
-                
-                # Check if we're in a headless environment
-                # Use manual authorization for headless environments
-                if self._is_headless_environment():
-                    logger.info("=" * 60)
-                    logger.info("Running in headless mode - Manual authorization required")
-                    logger.info("=" * 60)
-                    # For Desktop apps, use localhost redirect but handle manually
-                    # Set redirect_uri to localhost (works with Desktop app OAuth clients)
-                    flow.redirect_uri = 'http://localhost:8080/'
-                    auth_url, _ = flow.authorization_url(prompt='consent', access_type='offline')
-                    logger.info("")
-                    logger.info("Please visit this URL to authorize the application:")
-                    logger.info("")
-                    logger.info(auth_url)
-                    logger.info("")
-                    logger.info("After authorizing, Google will try to redirect to localhost.")
-                    logger.info("Since localhost won't work, look for the 'code' parameter in the URL.")
-                    logger.info("The URL will look like: http://localhost:8080/?code=XXXXX&scope=...")
-                    logger.info("")
-                    logger.info("Copy the ENTIRE redirect URL and paste it here:")
-                    logger.info("")
-                    authorization_response = input("Enter the authorization response URL: ").strip()
-                    # Extract code from URL
-                    from urllib.parse import urlparse, parse_qs
-                    parsed = urlparse(authorization_response)
-                    params = parse_qs(parsed.query)
-                    if 'code' in params:
-                        code = params['code'][0]
-                        logger.info("Extracted authorization code, fetching token...")
-                        flow.fetch_token(code=code)
+                try:
+                    creds.refresh(Request())
+                except (socket.gaierror, OSError, requests.exceptions.ConnectionError) as e:
+                    self._handle_network_error(e, "refreshing authentication token")
+                except Exception as e:
+                    # Check if it's a network-related error from requests/urllib3
+                    error_str = str(e).lower()
+                    if any(keyword in error_str for keyword in ['connection', 'dns', 'resolve', 'network', 'timeout']):
+                        self._handle_network_error(e, "refreshing authentication token")
                     else:
-                        # Try as-is if it's already just a code
-                        flow.fetch_token(code=authorization_response)
-                    creds = flow.credentials
-                else:
-                    creds = flow.run_local_server(port=0)
+                        # Re-raise other exceptions (e.g., authentication errors)
+                        raise
+            else:
+                try:
+                    flow = InstalledAppFlow.from_client_secrets_file(
+                        self.credentials_file, SCOPES)
+                    
+                    # Check if we're in a headless environment
+                    # Use manual authorization for headless environments
+                    if self._is_headless_environment():
+                        logger.info("=" * 60)
+                        logger.info("Running in headless mode - Manual authorization required")
+                        logger.info("=" * 60)
+                        # For Desktop apps, use localhost redirect but handle manually
+                        # Set redirect_uri to localhost (works with Desktop app OAuth clients)
+                        flow.redirect_uri = 'http://localhost:8080/'
+                        auth_url, _ = flow.authorization_url(prompt='consent', access_type='offline')
+                        logger.info("")
+                        logger.info("Please visit this URL to authorize the application:")
+                        logger.info("")
+                        logger.info(auth_url)
+                        logger.info("")
+                        logger.info("After authorizing, Google will try to redirect to localhost.")
+                        logger.info("Since localhost won't work, look for the 'code' parameter in the URL.")
+                        logger.info("The URL will look like: http://localhost:8080/?code=XXXXX&scope=...")
+                        logger.info("")
+                        logger.info("Copy the ENTIRE redirect URL and paste it here:")
+                        logger.info("")
+                        authorization_response = input("Enter the authorization response URL: ").strip()
+                        # Extract code from URL
+                        from urllib.parse import urlparse, parse_qs
+                        parsed = urlparse(authorization_response)
+                        params = parse_qs(parsed.query)
+                        if 'code' in params:
+                            code = params['code'][0]
+                            logger.info("Extracted authorization code, fetching token...")
+                            try:
+                                flow.fetch_token(code=code)
+                            except (socket.gaierror, OSError, requests.exceptions.ConnectionError) as e:
+                                self._handle_network_error(e, "fetching OAuth token")
+                                raise
+                        else:
+                            # Try as-is if it's already just a code
+                            try:
+                                flow.fetch_token(code=authorization_response)
+                            except (socket.gaierror, OSError, requests.exceptions.ConnectionError) as e:
+                                self._handle_network_error(e, "fetching OAuth token")
+                                raise
+                        creds = flow.credentials
+                    else:
+                        try:
+                            creds = flow.run_local_server(port=0)
+                        except (socket.gaierror, OSError, requests.exceptions.ConnectionError) as e:
+                            self._handle_network_error(e, "running OAuth local server")
+                            raise
+                except (socket.gaierror, OSError) as e:
+                    self._handle_network_error(e, "initializing OAuth flow")
+                    raise
+                except requests.exceptions.ConnectionError as e:
+                    self._handle_network_error(e, "connecting to Google OAuth servers")
+                    raise
             
             # Save the credentials for the next run
             with open(token_file, 'w') as token:
@@ -112,6 +143,60 @@ class DriveDownloader:
             self.service = build('drive', 'v3', credentials=creds)
         
         logger.info("Successfully authenticated with Google Drive API")
+    
+    def _handle_network_error(self, error: Exception, context: str = "authentication"):
+        """
+        Handle network connectivity errors with helpful error messages.
+        
+        Args:
+            error: The exception that was raised
+            context: Description of what operation was being performed
+        """
+        error_msg = str(error).lower()
+        error_type = type(error).__name__
+        
+        # Check for DNS resolution errors
+        if isinstance(error, socket.gaierror) or 'nodename nor servname provided' in error_msg or 'name resolution' in error_msg:
+            logger.error("=" * 70)
+            logger.error("NETWORK CONNECTIVITY ERROR")
+            logger.error("=" * 70)
+            logger.error("")
+            logger.error(f"Cannot connect to Google's authentication servers while {context}.")
+            logger.error("This usually indicates a network connectivity or DNS issue.")
+            logger.error("")
+            logger.error("Troubleshooting steps:")
+            logger.error("  1. Check your internet connection")
+            logger.error("  2. Verify DNS is working: try 'ping google.com' or 'nslookup oauth2.googleapis.com'")
+            logger.error("  3. Check if you're behind a firewall or proxy that blocks Google services")
+            logger.error("  4. Try restarting your network connection")
+            logger.error("  5. If on a corporate network, contact IT about firewall rules")
+            logger.error("")
+            logger.error("You can test connectivity by running:")
+            logger.error("  python3 -c \"import socket; socket.create_connection(('oauth2.googleapis.com', 443), timeout=5)\"")
+            logger.error("")
+            raise AuthenticationError(
+                f"Network connectivity error during {context}: Cannot resolve or connect to oauth2.googleapis.com. "
+                "Please check your internet connection and DNS settings."
+            ) from error
+        else:
+            # Other network errors
+            logger.error("=" * 70)
+            logger.error("NETWORK ERROR")
+            logger.error("=" * 70)
+            logger.error("")
+            logger.error(f"Network error during {context}: {error}")
+            logger.error(f"Error type: {error_type}")
+            logger.error("")
+            logger.error("Troubleshooting steps:")
+            logger.error("  1. Check your internet connection")
+            logger.error("  2. Verify you can access Google services in a web browser")
+            logger.error("  3. Check firewall/proxy settings")
+            logger.error("  4. Try again in a few moments")
+            logger.error("")
+            raise AuthenticationError(
+                f"Network error during {context}: {error}. "
+                "Please check your internet connection and try again."
+            ) from error
     
     def _can_open_browser(self):
         """Check if we can open a browser."""

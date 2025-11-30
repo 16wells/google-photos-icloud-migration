@@ -378,3 +378,8 @@ socket.on('terminal_output', (data) => {
 
 This hybrid approach gives users the best of both worlds: clean UI for quick overview, and full terminal output for detailed monitoring!
 
+
+
+
+
+

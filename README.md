@@ -66,6 +66,22 @@ Edit `config.yaml` with your settings:
 - **Processing**: Base directory, batch sizes, cleanup options
 - **Metadata**: Options for preserving dates, GPS, descriptions, albums
 
+### Environment Variables (.env File)
+
+For better security, store sensitive credentials in a `.env` file (automatically gitignored):
+
+```bash
+cp .env.example .env
+# Edit .env and add your credentials
+```
+
+The `.env` file supports:
+- `ICLOUD_APPLE_ID`, `ICLOUD_PASSWORD`, `ICLOUD_2FA_CODE`, `ICLOUD_2FA_DEVICE_ID`
+- `GOOGLE_DRIVE_CREDENTIALS_FILE`
+- `GITHUB_TOKEN` (for repository management scripts)
+
+Environment variables take precedence over `config.yaml` values. See [AUTHENTICATION_GUIDE.md](AUTHENTICATION_GUIDE.md) for details.
+
 ## Usage
 
 ### Web UI (Recommended)

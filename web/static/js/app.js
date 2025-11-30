@@ -9,6 +9,84 @@ const socket = io();
 let currentStatus = 'idle';
 let configPath = 'config.yaml';
 let currentLogLevel = 'DEBUG';
+let apiKey = null; // Will be set from environment or user input
+
+// Get CSRF token from meta tag (if available)
+function getCSRFToken() {
+    const metaTag = document.querySelector('meta[name="csrf-token"]');
+    return metaTag ? metaTag.getAttribute('content') : null;
+}
+
+// Get API key from localStorage or prompt
+function getAPIKey() {
+    if (apiKey) return apiKey;
+    apiKey = localStorage.getItem('web_api_key');
+    if (!apiKey) {
+        // Try to get from environment variable (set by server)
+        const envKey = window.WEB_API_KEY;
+        if (envKey) {
+            apiKey = envKey;
+            localStorage.setItem('web_api_key', apiKey);
+        }
+    }
+    return apiKey;
+}
+
+// Helper function for API requests with CSRF and API key
+async function apiRequest(url, options = {}) {
+    const headers = {
+        'Content-Type': 'application/json',
+        ...options.headers
+    };
+    
+    // Add CSRF token if available
+    const csrfToken = getCSRFToken();
+    if (csrfToken) {
+        headers['X-CSRFToken'] = csrfToken;
+    }
+    
+    // Add API key if available
+    const key = getAPIKey();
+    if (key) {
+        headers['X-API-Key'] = key;
+    } else {
+        // Try query parameter as fallback
+        const urlObj = new URL(url, window.location.origin);
+        if (key) {
+            urlObj.searchParams.set('api_key', key);
+            url = urlObj.toString();
+        }
+    }
+    
+    const response = await fetch(url, {
+        ...options,
+        headers,
+        credentials: 'same-origin' // Include cookies for CSRF
+    });
+    
+    // Handle rate limiting
+    if (response.status === 429) {
+        const retryAfter = response.headers.get('Retry-After');
+        throw new Error(`Rate limit exceeded. Please try again in ${retryAfter || 'a few'} seconds.`);
+    }
+    
+    // Handle authentication errors
+    if (response.status === 401) {
+        // Clear stored API key and prompt user
+        localStorage.removeItem('web_api_key');
+        apiKey = null;
+        const newKey = prompt('API key required. Please enter your API key:');
+        if (newKey) {
+            apiKey = newKey;
+            localStorage.setItem('web_api_key', newKey);
+            // Retry the request
+            return apiRequest(url, options);
+        }
+        throw new Error('Authentication required');
+    }
+    
+    return response;
+}
 
 // DOM elements
 const elements = {
@@ -390,7 +468,7 @@ function updateLogLevel() {
     
     // Update log level on server if migration is running
     if (currentStatus === 'running') {
-        fetch('/api/migration/log-level', {
+        apiRequest('/api/migration/log-level', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -410,7 +488,7 @@ async function startMigration() {
     currentLogLevel = elements.logLevelSelect.value;
     
     try {
-        const response = await fetch('/api/migration/start', {
+        const response = await apiRequest('/api/migration/start', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -438,7 +516,7 @@ async function startMigration() {
 
 async function stopMigration() {
     try {
-        const response = await fetch('/api/migration/stop', {
+        const response = await apiRequest('/api/migration/stop', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -460,7 +538,7 @@ async function stopMigration() {
 
 async function refreshStatus() {
     try {
-        const response = await fetch('/api/status');
+        const response = await apiRequest('/api/status');
         const data = await response.json();
         
         updateStatus(data.status, data.error, data.log_level, data.paused_for_retries);
@@ -477,7 +555,7 @@ async function refreshStatus() {
 
 async function proceedAfterRetries() {
     try {
-        const response = await fetch('/api/migration/proceed-after-retries', {
+        const response = await apiRequest('/api/migration/proceed-after-retries', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -502,7 +580,7 @@ async function loadConfig() {
     configPath = elements.configPathInput.value || 'config.yaml';
     
     try {
-        const response = await fetch(`/api/config?config_path=${encodeURIComponent(configPath)}`);
+        const response = await apiRequest(`/api/config?config_path=${encodeURIComponent(configPath)}`);
         const data = await response.json();
         
         if (!response.ok) {
@@ -519,7 +597,7 @@ async function loadConfig() {
 
 async function loadFailedUploads() {
     try {
-        const response = await fetch('/api/failed-uploads');
+        const response = await apiRequest('/api/failed-uploads');
         const data = await response.json();
         
         if (!response.ok) {
@@ -580,7 +658,7 @@ async function retrySingleFailedUpload(filePath, index) {
     try {
         const useSyncMethod = elements.useSyncCheckbox ? elements.useSyncCheckbox.checked : false;
         configPath = elements.configPathInput ? elements.configPathInput.value || 'config.yaml' : 'config.yaml';
-        const response = await fetch('/api/failed-uploads/retry-single', {
+        const response = await apiRequest('/api/failed-uploads/retry-single', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -637,7 +715,7 @@ async function retryAllFailedUploads() {
     try {
         const useSyncMethod = elements.useSyncCheckbox ? elements.useSyncCheckbox.checked : false;
         configPath = elements.configPathInput ? elements.configPathInput.value || 'config.yaml' : 'config.yaml';
-        const response = await fetch('/api/failed-uploads/retry', {
+        const response = await apiRequest('/api/failed-uploads/retry', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -734,7 +812,7 @@ async function checkDiskSpace() {
     
     try {
         const configPath = elements.configPathInput ? elements.configPathInput.value || 'config.yaml' : 'config.yaml';
-        const response = await fetch(`/api/disk-space?config_path=${encodeURIComponent(configPath)}`);
+        const response = await apiRequest(`/api/disk-space?config_path=${encodeURIComponent(configPath)}`);
         const data = await response.json();
         
         if (!response.ok || data.error) {
@@ -785,7 +863,7 @@ async function checkServerStatus() {
     if (!statusDiv) return;
     
     try {
-        const response = await fetch('/api/server/status');
+        const response = await apiRequest('/api/server/status');
         const data = await response.json();
         
         if (!response.ok) {
@@ -836,7 +914,7 @@ async function showRestartInstructions() {
     if (!modal || !content) return;
     
     try {
-        const response = await fetch('/api/server/restart-instructions');
+        const response = await apiRequest('/api/server/restart-instructions');
         const data = await response.json();
         
         if (!response.ok) {
@@ -1009,7 +1087,7 @@ async function redownloadCorruptedZip() {
     skipBtn.disabled = true;
     
     try {
-        const response = await fetch('/api/corrupted-zip/redownload', {
+        const response = await apiRequest('/api/corrupted-zip/redownload', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -1048,7 +1126,7 @@ async function skipCorruptedZip() {
     
     try {
         // Signal server to skip this corrupted zip
-        const response = await fetch('/api/corrupted-zip/skip', {
+        const response = await apiRequest('/api/corrupted-zip/skip', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'

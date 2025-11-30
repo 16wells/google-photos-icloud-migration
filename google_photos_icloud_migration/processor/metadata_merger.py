@@ -183,6 +183,10 @@ class MetadataMerger:
         
         args = self.build_exiftool_args(media_file, json_file, metadata)
         
+        # Validate file path before subprocess call (prevent command injection)
+        from google_photos_icloud_migration.utils.security import validate_subprocess_path
+        validate_subprocess_path(media_file)
+        
         # Run ExifTool
         try:
             result = subprocess.run(

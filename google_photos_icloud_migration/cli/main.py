@@ -1515,6 +1515,7 @@ class MigrationOrchestrator:
             logger.info(f"Uploaded {successful}/{len(upload_results)} files from {zip_name}")
             
             # Save failed uploads for retry
+            failed_files = []
             if failed_count > 0:
                 failed_files = [str(path) for path, success in upload_results.items() if not success]
                 self._save_failed_uploads(failed_files, file_to_album)
@@ -1529,8 +1530,24 @@ class MigrationOrchestrator:
             self.state_manager.mark_zip_uploaded(zip_name)
             self.state_manager.clear_checkpoint()
             
-            # Cleanup extracted files for this zip (save disk space)
+            # Cleanup successfully uploaded processed files (save disk space)
+            # Keep failed uploads for retry
             import shutil
+            cleaned_count = 0
+            for file_path, success in upload_results.items():
+                # Only delete processed files (not original extracted files)
+                # and only if upload was successful
+                if success and file_path.exists() and str(file_path).startswith(str(processed_dir)):
+                    try:
+                        file_path.unlink()
+                        cleaned_count += 1
+                    except Exception as e:
+                        logger.warning(f"Could not delete processed file {file_path.name}: {e}")
+            
+            if cleaned_count > 0:
+                logger.info(f"✓ Cleaned up {cleaned_count} successfully uploaded processed files")
+            
+            # Cleanup extracted files for this zip (save disk space)
             if extracted_dir.exists():
                 logger.info(f"Cleaning up extracted files for {zip_path.name}")
                 shutil.rmtree(extracted_dir)

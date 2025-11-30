@@ -29,6 +29,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI/CD pipeline (GitHub Actions for tests, linting, pre-commit)
 - Package installation support (pip install -e .)
 - Entry point command: photo-migrate
+- **.env file support** for secure credential storage
+  - `.env.example` template file for environment variables
+  - Automatic loading of `.env` files using python-dotenv
+  - Support for GitHub token storage for repository management scripts
+  - Enhanced documentation for environment variable usage
+- **GitHub repository management script** (`scripts/set_github_repo_info.py`)
+  - Automated repository description and topics management
+  - Support for GitHub personal access tokens via `.env` file
+  - Multiple authentication methods (`.env`, environment variable, or command-line argument)
 
 ### Changed
 - Code style standardized with black and isort

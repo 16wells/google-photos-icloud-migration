@@ -290,3 +290,8 @@ orchestrator.current_file = {
 - WebSocket is already set up, we just need to emit more detailed data more frequently
 - The `MetricsTracker` class exists but isn't fully utilized by the web interface
 
+
+
+
+
+

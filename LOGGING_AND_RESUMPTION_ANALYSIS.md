@@ -264,3 +264,8 @@ For retries in terminal mode:
 - Failed uploads can be retried with `--retry-failed` ✅
 - But failed extractions, conversions, or Photos copies cannot be retried separately ❌
 
+
+
+
+
+

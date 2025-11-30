@@ -76,3 +76,8 @@ tail -20 migration.log
 
 **Use the terminal version** - it's what the tool was originally designed for, and it works much better for monitoring progress. The web UI is a nice addition, but it has bugs that make it confusing.
 
+
+
+
+
+

@@ -431,9 +431,31 @@ metadata:
 
 These should all be `true` to preserve everything from Google Photos.
 
-### 8.4 Save the Configuration
+### 8.4 Optional: Set Up .env File for Sensitive Credentials
 
-Save the file and close the editor.
+For better security, you can store sensitive credentials (like passwords or API tokens) in a `.env` file instead of `config.yaml`. The `.env` file is automatically ignored by git.
+
+```bash
+# Copy the example file
+cp .env.example .env
+
+# Edit .env and add your credentials (optional)
+# This is recommended for passwords and API tokens
+```
+
+The `.env` file supports:
+- `ICLOUD_APPLE_ID` - Your Apple ID email
+- `ICLOUD_PASSWORD` - Your Apple ID password (for API method only)
+- `ICLOUD_2FA_CODE` - 2FA verification code
+- `ICLOUD_2FA_DEVICE_ID` - Trusted device ID
+- `GOOGLE_DRIVE_CREDENTIALS_FILE` - Path to credentials.json
+- `GITHUB_TOKEN` - GitHub personal access token (for repository management scripts)
+
+**Note:** Environment variables in `.env` take precedence over `config.yaml` values. This is optional - you can also leave passwords empty in `config.yaml` and be prompted when running.
+
+### 8.5 Save the Configuration
+
+Save the files and close the editor.
 
 ---
 
