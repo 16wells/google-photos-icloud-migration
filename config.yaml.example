@@ -40,6 +40,10 @@ processing:
   extracted_dir: "extracted"
   # Directory for processed files (with metadata merged)
   processed_dir: "processed"
+  # Maximum disk space to use (in GB). Set to 0 or null for unlimited
+  # The program will stop downloading new files when this limit is reached
+  # Minimum: 10 GB, Recommended: 50+ GB for large libraries
+  max_disk_space_gb: null  # null = unlimited
   # Batch size for processing (number of files to process at once)
   batch_size: 100
   # Clean up extracted files after processing

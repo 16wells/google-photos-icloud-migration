@@ -1074,6 +1074,21 @@ async function skipCorruptedZip() {
 // Config Editor Functions
 // ========================================================================
 
+function updateDiskSpaceValue(value) {
+    const displayValue = document.getElementById('disk-space-value');
+    if (value == 0) {
+        displayValue.textContent = 'Unlimited';
+        displayValue.className = 'text-green-600 font-semibold';
+    } else {
+        displayValue.textContent = value + ' GB';
+        if (value < 50) {
+            displayValue.className = 'text-orange-600 font-semibold';
+        } else {
+            displayValue.className = 'text-primary-600 font-semibold';
+        }
+    }
+}
+
 function toggleConfigEditor() {
     const editor = document.getElementById('config-editor');
     const toggleText = document.getElementById('config-toggle-text');
@@ -1126,6 +1141,13 @@ async function loadConfigForEditing() {
         document.getElementById('config-base-dir').value = config.processing?.base_dir || '';
         document.getElementById('config-max-downloads').value = config.processing?.max_parallel_downloads || 3;
         document.getElementById('config-max-uploads').value = config.processing?.max_parallel_uploads || 5;
+        
+        // Disk space slider
+        const maxDiskSpace = config.processing?.max_disk_space_gb;
+        const sliderValue = (maxDiskSpace === null || maxDiskSpace === 0) ? 0 : maxDiskSpace;
+        document.getElementById('config-max-disk-space').value = sliderValue;
+        updateDiskSpaceValue(sliderValue);
+        
         document.getElementById('config-verify-upload').checked = config.processing?.verify_after_upload !== false;
         document.getElementById('config-cleanup').checked = config.processing?.cleanup_after_processing !== false;
         document.getElementById('config-preserve-dates').checked = config.processing?.preserve_original_dates !== false;
@@ -1140,6 +1162,10 @@ async function loadConfigForEditing() {
 
 async function saveConfig() {
     const configPath = elements.configPathInput.value || 'config.yaml';
+    
+    // Get disk space value
+    const diskSpaceValue = parseInt(document.getElementById('config-max-disk-space').value);
+    const maxDiskSpaceGb = diskSpaceValue === 0 ? null : diskSpaceValue;
     
     // Build config object from form
     const config = {
@@ -1157,6 +1183,7 @@ async function saveConfig() {
             processed_dir: 'processed',
             max_parallel_downloads: parseInt(document.getElementById('config-max-downloads').value) || 3,
             max_parallel_uploads: parseInt(document.getElementById('config-max-uploads').value) || 5,
+            max_disk_space_gb: maxDiskSpaceGb,
             verify_after_upload: document.getElementById('config-verify-upload').checked,
             cleanup_after_processing: document.getElementById('config-cleanup').checked,
             preserve_original_dates: document.getElementById('config-preserve-dates').checked
@@ -1190,7 +1217,8 @@ async function saveConfig() {
         addLog('success', result.message || 'Configuration saved successfully');
         
         // Show success notification
-        showNotification('Configuration saved! Restart the migration for changes to take effect.', 'success');
+        const limitMsg = maxDiskSpaceGb ? ` (${maxDiskSpaceGb} GB limit)` : ' (unlimited)';
+        showNotification('Configuration saved' + limitMsg + '! Restart the migration for changes to take effect.', 'success');
         
     } catch (error) {
         showError(`Failed to save configuration: ${error.message}`);
