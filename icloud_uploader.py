@@ -6,6 +6,7 @@ import os
 import time
 from pathlib import Path
 from typing import List, Dict, Optional, Callable, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pyicloud import PyiCloudService
 from pyicloud.exceptions import PyiCloudFailedLoginException, PyiCloud2SARequiredException, PyiCloud2FARequiredException
 from tqdm import tqdm
@@ -18,7 +19,8 @@ class iCloudUploader:
     
     def __init__(self, apple_id: str, password: str, 
                  trusted_device_id: Optional[str] = None,
-                 two_fa_code: Optional[str] = None):
+                 two_fa_code: Optional[str] = None,
+                 max_parallel_uploads: int = 5):
         """
         Initialize the iCloud uploader.
         
@@ -28,6 +30,7 @@ class iCloudUploader:
             trusted_device_id: Optional trusted device ID for 2FA
             two_fa_code: Optional 2FA verification code (for non-interactive use)
                          Can also be set via ICLOUD_2FA_CODE environment variable
+            max_parallel_uploads: Maximum number of concurrent uploads (default: 5)
         """
         self.apple_id = apple_id
         # Strip password but preserve it - don't convert empty string to None
@@ -43,6 +46,7 @@ class iCloudUploader:
         self.api = None
         self._existing_albums_cache: Optional[Dict[str, any]] = None
         self._albums_cache_timestamp: Optional[float] = None
+        self.max_parallel_uploads = max_parallel_uploads
         
         # Prompt for password if empty
         if not self.password:
@@ -1573,13 +1577,15 @@ class iCloudUploader:
     def upload_photos_batch(self, photo_paths: List[Path], 
                            album_name: Optional[str] = None,
                            verify_after_upload: bool = True,
-                           on_verification_failure: Optional[Callable[[Path], None]] = None) -> Dict[Path, bool]:
+                           on_verification_failure: Optional[Callable[[Path], None]] = None,
+                           on_upload_success: Optional[Callable[[Path], None]] = None) -> Dict[Path, bool]:
         """
         Upload multiple photos in a batch, preserving album organization.
         
         This method is optimized for bulk uploads with album preservation:
         - Gets or creates the target album before uploading
         - Uploads all photos to the same album efficiently
+        - Supports parallel uploads for faster processing
         - Handles thousands of photos by batching and rate limiting
         
         Args:
@@ -1587,6 +1593,7 @@ class iCloudUploader:
             album_name: Album name to add photos to (will check for existing album first)
             verify_after_upload: If True, verify each file after upload
             on_verification_failure: Optional callback function(file_path) called when verification fails
+            on_upload_success: Optional callback function(file_path) called when upload succeeds (for incremental cleanup)
         
         Returns:
             Dictionary mapping file paths to success status
@@ -1610,9 +1617,41 @@ class iCloudUploader:
         else:
             logger.info(f"Uploading {len(photo_paths)} photos without album assignment")
         
-        # Upload photos with progress tracking
-        successful_count = 0
-        failed_count = 0
+        # Determine if we should use parallel uploads
+        use_parallel = self.max_parallel_uploads > 1 and len(photo_paths) > 1
+        
+        if use_parallel:
+            logger.info(f"Using parallel uploads ({self.max_parallel_uploads} workers) for faster processing")
+            results = self._upload_photos_parallel(
+                photo_paths, album, album_name, verify_after_upload,
+                on_verification_failure, on_upload_success
+            )
+        else:
+            logger.info("Using sequential uploads")
+            results = self._upload_photos_sequential(
+                photo_paths, album, album_name, verify_after_upload,
+                on_verification_failure, on_upload_success
+            )
+        
+        # Summary
+        successful_count = sum(1 for v in results.values() if v)
+        failed_count = len(results) - successful_count
+        logger.info("=" * 60)
+        logger.info(f"Upload batch complete: {successful_count}/{len(results)} photos succeeded")
+        if album_name:
+            logger.info(f"Album: '{album_name}'")
+        if failed_count > 0:
+            logger.warning(f"⚠ {failed_count} photos failed to upload")
+        logger.info("=" * 60)
+        
+        return results
+    
+    def _upload_photos_sequential(self, photo_paths: List[Path], album: Optional[any],
+                                 album_name: Optional[str], verify_after_upload: bool,
+                                 on_verification_failure: Optional[Callable[[Path], None]],
+                                 on_upload_success: Optional[Callable[[Path], None]]) -> Dict[Path, bool]:
+        """Upload photos sequentially (one at a time)."""
+        results = {}
         
         for photo_path in tqdm(photo_paths, desc=f"Uploading{' to ' + album_name if album_name else 'photos'}"):
             try:
@@ -1629,13 +1668,14 @@ class iCloudUploader:
                 
                 results[photo_path] = success
                 
-                if success:
-                    successful_count += 1
-                else:
-                    failed_count += 1
+                # Call success callback for incremental cleanup
+                if success and on_upload_success:
+                    try:
+                        on_upload_success(photo_path)
+                    except Exception as e:
+                        logger.warning(f"Error in upload success callback for {photo_path.name}: {e}")
                 
                 # Rate limiting to avoid overwhelming the API
-                # Use shorter delay for successful uploads, longer for failures
                 if success:
                     time.sleep(0.3)  # 3 photos per second max
                 else:
@@ -1644,17 +1684,75 @@ class iCloudUploader:
             except Exception as e:
                 logger.error(f"Exception during upload of {photo_path.name}: {e}")
                 results[photo_path] = False
-                failed_count += 1
                 time.sleep(1.0)
         
-        # Summary
-        logger.info("=" * 60)
-        logger.info(f"Upload batch complete: {successful_count}/{len(results)} photos succeeded")
-        if album_name:
-            logger.info(f"Album: '{album_name}'")
-        if failed_count > 0:
-            logger.warning(f"⚠ {failed_count} photos failed to upload")
-        logger.info("=" * 60)
+        return results
+    
+    def _upload_photos_parallel(self, photo_paths: List[Path], album: Optional[any],
+                               album_name: Optional[str], verify_after_upload: bool,
+                               on_verification_failure: Optional[Callable[[Path], None]],
+                               on_upload_success: Optional[Callable[[Path], None]]) -> Dict[Path, bool]:
+        """Upload photos in parallel using ThreadPoolExecutor."""
+        results = {}
+        
+        def upload_single_photo(photo_path: Path) -> Tuple[Path, bool]:
+            """Upload a single photo with rate limiting per thread."""
+            try:
+                success = self.upload_photo(photo_path, album=album, album_name=album_name)
+                
+                # Verify upload if requested
+                if success and verify_after_upload:
+                    verified = self.verify_file_uploaded(photo_path)
+                    if not verified:
+                        logger.warning(f"Upload verification failed for {photo_path.name}")
+                        if on_verification_failure:
+                            try:
+                                on_verification_failure(photo_path)
+                            except Exception as e:
+                                logger.error(f"Error in verification failure callback: {e}")
+                        success = False
+                
+                # Call success callback for incremental cleanup
+                if success and on_upload_success:
+                    try:
+                        on_upload_success(photo_path)
+                    except Exception as e:
+                        logger.warning(f"Error in upload success callback for {photo_path.name}: {e}")
+                
+                # Rate limiting per thread (0.3s per upload per thread)
+                # With 5 workers, this gives ~16 photos/second total
+                if success:
+                    time.sleep(0.3)
+                else:
+                    time.sleep(1.0)  # Wait longer after failures
+                
+                return (photo_path, success)
+                
+            except Exception as e:
+                logger.error(f"Exception during upload of {photo_path.name}: {e}")
+                time.sleep(1.0)
+                return (photo_path, False)
+        
+        # Use ThreadPoolExecutor for parallel uploads
+        with ThreadPoolExecutor(max_workers=self.max_parallel_uploads) as executor:
+            # Submit all upload tasks
+            future_to_path = {
+                executor.submit(upload_single_photo, photo_path): photo_path
+                for photo_path in photo_paths
+            }
+            
+            # Collect results as they complete (with progress bar)
+            with tqdm(total=len(photo_paths), desc=f"Uploading{' to ' + album_name if album_name else 'photos'}") as pbar:
+                for future in as_completed(future_to_path):
+                    photo_path = future_to_path[future]
+                    try:
+                        path, success = future.result()
+                        results[path] = success
+                    except Exception as e:
+                        logger.error(f"Error getting result for {photo_path.name}: {e}")
+                        results[photo_path] = False
+                    finally:
+                        pbar.update(1)
         
         return results
     
@@ -1685,13 +1783,15 @@ class iCloudPhotosSyncUploader:
     sync to iCloud Photos if iCloud Photos is enabled in System Settings.
     """
     
-    def __init__(self, photos_library_path: Optional[Path] = None):
+    def __init__(self, photos_library_path: Optional[Path] = None, max_parallel_uploads: int = 5):
         """
         Initialize the PhotoKit-based uploader.
         
         Args:
             photos_library_path: Path to Photos library (optional, not used with PhotoKit)
+            max_parallel_uploads: Maximum number of concurrent uploads (default: 5)
         """
+        self.max_parallel_uploads = max_parallel_uploads
         # Check if we're on macOS
         import platform
         if platform.system() != 'Darwin':
@@ -2079,18 +2179,21 @@ class iCloudPhotosSyncUploader:
     def upload_files_batch(self, file_paths: List[Path],
                           albums: Optional[Dict[Path, str]] = None,
                           verify_after_upload: bool = True,
-                          on_verification_failure: Optional[Callable[[Path], None]] = None) -> Dict[Path, bool]:
+                          on_verification_failure: Optional[Callable[[Path], None]] = None,
+                          on_upload_success: Optional[Callable[[Path], None]] = None) -> Dict[Path, bool]:
         """
         Upload multiple files in a batch, organized by album.
         
         This method groups files by album and saves them efficiently,
         creating albums as needed and reusing existing ones.
+        Supports parallel uploads for faster processing.
         
         Args:
             file_paths: List of file paths
             albums: Optional mapping of files to album names
             verify_after_upload: If True, verify each file after upload
             on_verification_failure: Optional callback function(file_path) called when verification fails
+            on_upload_success: Optional callback function(file_path) called when upload succeeds (for incremental cleanup)
         
         Returns:
             Dictionary mapping file paths to success status
@@ -2105,6 +2208,9 @@ class iCloudPhotosSyncUploader:
                 files_by_album[album_name] = []
             files_by_album[album_name].append(file_path)
         
+        # Determine if we should use parallel uploads
+        use_parallel = self.max_parallel_uploads > 1
+        
         # Process each album group
         for album_name, files in files_by_album.items():
             if album_name:
@@ -2116,8 +2222,71 @@ class iCloudPhotosSyncUploader:
             else:
                 logger.info(f"Saving {len(files)} photos (no album)")
             
-            # Save files in this album
-            for file_path in tqdm(files, desc=f"Saving to Photos{album_name and f' ({album_name})' or ''}"):
+            if use_parallel and len(files) > 1:
+                logger.info(f"Using parallel uploads ({self.max_parallel_uploads} workers) for faster processing")
+                album_results = self._upload_files_parallel(
+                    files, album_name, verify_after_upload,
+                    on_verification_failure, on_upload_success
+                )
+            else:
+                album_results = self._upload_files_sequential(
+                    files, album_name, verify_after_upload,
+                    on_verification_failure, on_upload_success
+                )
+            
+            results.update(album_results)
+        
+        successful = sum(1 for v in results.values() if v)
+        failed = len(results) - successful
+        logger.info(f"Saved {successful}/{len(results)} files to Photos library")
+        if failed > 0:
+            logger.warning(f"⚠️  {failed} files failed to save")
+        
+        return results
+    
+    def _upload_files_sequential(self, files: List[Path], album_name: Optional[str],
+                                verify_after_upload: bool,
+                                on_verification_failure: Optional[Callable[[Path], None]],
+                                on_upload_success: Optional[Callable[[Path], None]]) -> Dict[Path, bool]:
+        """Upload files sequentially (one at a time)."""
+        results = {}
+        
+        for file_path in tqdm(files, desc=f"Saving to Photos{album_name and f' ({album_name})' or ''}"):
+            success = self.upload_file(file_path, album_name)
+            
+            # Verify upload if requested
+            if success and verify_after_upload:
+                verified = self.verify_file_uploaded(file_path)
+                if not verified:
+                    logger.warning(f"Save verification failed for {file_path.name}")
+                    if on_verification_failure:
+                        try:
+                            on_verification_failure(file_path)
+                        except Exception as e:
+                            logger.error(f"Error in verification failure callback: {e}")
+                    success = False
+            
+            # Call success callback for incremental cleanup
+            if success and on_upload_success:
+                try:
+                    on_upload_success(file_path)
+                except Exception as e:
+                    logger.warning(f"Error in upload success callback for {file_path.name}: {e}")
+            
+            results[file_path] = success
+        
+        return results
+    
+    def _upload_files_parallel(self, files: List[Path], album_name: Optional[str],
+                              verify_after_upload: bool,
+                              on_verification_failure: Optional[Callable[[Path], None]],
+                              on_upload_success: Optional[Callable[[Path], None]]) -> Dict[Path, bool]:
+        """Upload files in parallel using ThreadPoolExecutor."""
+        results = {}
+        
+        def upload_single_file(file_path: Path) -> Tuple[Path, bool]:
+            """Upload a single file."""
+            try:
                 success = self.upload_file(file_path, album_name)
                 
                 # Verify upload if requested
@@ -2126,16 +2295,45 @@ class iCloudPhotosSyncUploader:
                     if not verified:
                         logger.warning(f"Save verification failed for {file_path.name}")
                         if on_verification_failure:
-                            on_verification_failure(file_path)
+                            try:
+                                on_verification_failure(file_path)
+                            except Exception as e:
+                                logger.error(f"Error in verification failure callback: {e}")
                         success = False
                 
-                results[file_path] = success
+                # Call success callback for incremental cleanup
+                if success and on_upload_success:
+                    try:
+                        on_upload_success(file_path)
+                    except Exception as e:
+                        logger.warning(f"Error in upload success callback for {file_path.name}: {e}")
+                
+                return (file_path, success)
+                
+            except Exception as e:
+                logger.error(f"Exception during upload of {file_path.name}: {e}")
+                return (file_path, False)
         
-        successful = sum(1 for v in results.values() if v)
-        failed = len(results) - successful
-        logger.info(f"Saved {successful}/{len(results)} files to Photos library")
-        if failed > 0:
-            logger.warning(f"⚠️  {failed} files failed to save")
+        # Use ThreadPoolExecutor for parallel uploads
+        with ThreadPoolExecutor(max_workers=self.max_parallel_uploads) as executor:
+            # Submit all upload tasks
+            future_to_path = {
+                executor.submit(upload_single_file, file_path): file_path
+                for file_path in files
+            }
+            
+            # Collect results as they complete (with progress bar)
+            with tqdm(total=len(files), desc=f"Saving to Photos{album_name and f' ({album_name})' or ''}") as pbar:
+                for future in as_completed(future_to_path):
+                    file_path = future_to_path[future]
+                    try:
+                        path, success = future.result()
+                        results[path] = success
+                    except Exception as e:
+                        logger.error(f"Error getting result for {file_path.name}: {e}")
+                        results[file_path] = False
+                    finally:
+                        pbar.update(1)
         
         return results
 

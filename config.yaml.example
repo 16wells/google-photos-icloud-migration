@@ -52,6 +52,10 @@ processing:
   max_workers: null
   # Enable parallel processing for faster operations
   enable_parallel_processing: true
+  # Maximum number of parallel uploads to iCloud (default: 5, recommended: 5-10)
+  # Higher values = faster uploads but may hit API rate limits
+  # Set to 1 to disable parallel uploads (sequential, slower but safer)
+  max_parallel_uploads: 5
 
 # Metadata Configuration
 metadata:

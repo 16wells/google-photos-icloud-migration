@@ -16,6 +16,7 @@ if sys.version_info < (3, 10):
 import argparse
 import json
 import logging
+import os
 import zipfile
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -113,7 +114,8 @@ class MigrationOrchestrator:
             'extracted_dir': 'extracted',
             'processed_dir': 'processed',
             'batch_size': 100,
-            'cleanup_after_upload': True
+            'cleanup_after_upload': True,
+            'max_disk_space_gb': None  # None = unlimited
         }
         
         for key, default_value in processing_defaults.items():
@@ -297,12 +299,18 @@ class MigrationOrchestrator:
         """
         icloud_config = self.config['icloud']
         
+        # Get max_parallel_uploads from config (default: 5)
+        max_parallel_uploads = self.config['processing'].get('max_parallel_uploads', 5)
+        
         if use_sync_method:
             # Get photos library path from config if specified
             photos_library_path = icloud_config.get('photos_library_path')
             if photos_library_path:
                 photos_library_path = Path(photos_library_path).expanduser()
-            self.icloud_uploader = iCloudPhotosSyncUploader(photos_library_path=photos_library_path)
+            self.icloud_uploader = iCloudPhotosSyncUploader(
+                photos_library_path=photos_library_path,
+                max_parallel_uploads=max_parallel_uploads
+            )
         else:
             password = icloud_config.get('password', '').strip() if icloud_config.get('password') else ''
             # Prompt for password if empty
@@ -321,7 +329,8 @@ class MigrationOrchestrator:
                 apple_id=apple_id,
                 password=password,
                 trusted_device_id=icloud_config.get('trusted_device_id'),
-                two_fa_code=icloud_config.get('two_fa_code')  # Support 2FA code from config or env var
+                two_fa_code=icloud_config.get('two_fa_code'),  # Support 2FA code from config or env var
+                max_parallel_uploads=max_parallel_uploads
             )
     
     def upload_to_icloud(self, media_json_pairs: Dict[Path, Optional[Path]],
@@ -848,13 +857,25 @@ class MigrationOrchestrator:
                 if action == 'stop':
                     raise RuntimeError(f"Migration stopped by user due to verification failure for {failed_file_path.name}")
             
+            # Create upload success callback for incremental cleanup
+            def upload_success_callback(file_path: Path):
+                """Delete processed file immediately after successful upload to free space."""
+                processed_dir = self.base_dir / self.config['processing']['processed_dir']
+                if file_path.exists() and str(file_path).startswith(str(processed_dir)):
+                    try:
+                        file_path.unlink()
+                        logger.debug(f"✓ Deleted {file_path.name} after successful upload")
+                    except Exception as e:
+                        logger.warning(f"Could not delete {file_path.name} after upload: {e}")
+            
             # Upload
             if isinstance(self.icloud_uploader, iCloudPhotosSyncUploader):
                 upload_results = self.icloud_uploader.upload_files_batch(
                     processed_files,
                     albums=file_to_album,
                     verify_after_upload=True,
-                    on_verification_failure=verification_failure_callback
+                    on_verification_failure=verification_failure_callback,
+                    on_upload_success=upload_success_callback
                 )
             else:
                 # Group by album using file_to_album mapping
@@ -878,11 +899,23 @@ class MigrationOrchestrator:
                     if files:
                         display_name = album_name if album_name else '(no album)'
                         logger.info(f"Uploading album: {display_name} ({len(files)} files)")
+                        # Create upload success callback for incremental cleanup
+                        def upload_success_callback(file_path: Path):
+                            """Delete processed file immediately after successful upload to free space."""
+                            processed_dir = self.base_dir / self.config['processing']['processed_dir']
+                            if file_path.exists() and str(file_path).startswith(str(processed_dir)):
+                                try:
+                                    file_path.unlink()
+                                    logger.debug(f"✓ Deleted {file_path.name} after successful upload")
+                                except Exception as e:
+                                    logger.warning(f"Could not delete {file_path.name} after upload: {e}")
+                        
                         album_results = self.icloud_uploader.upload_photos_batch(
                             files,
                             album_name=album_name if album_name else None,
                             verify_after_upload=True,
-                            on_verification_failure=verification_failure_callback
+                            on_verification_failure=verification_failure_callback,
+                            on_upload_success=upload_success_callback
                         )
                         upload_results.update(album_results)
             
@@ -1062,6 +1095,28 @@ class MigrationOrchestrator:
         
         return sorted(existing_zips)  # Sort for consistent processing order
     
+    def _get_current_disk_usage_gb(self) -> float:
+        """
+        Calculate current disk usage in the base directory.
+        
+        Returns:
+            Current disk usage in GB
+        """
+        import shutil
+        total_size = 0
+        
+        # Calculate size of all files in base directory
+        for root, dirs, files in os.walk(self.base_dir):
+            for file in files:
+                try:
+                    file_path = Path(root) / file
+                    total_size += file_path.stat().st_size
+                except (OSError, FileNotFoundError):
+                    # Skip files that can't be accessed
+                    continue
+        
+        return total_size / (1024 ** 3)
+    
     def _validate_zip_file(self, zip_path: Path, expected_size: Optional[int] = None) -> bool:
         """
         Validate that a zip file is valid and complete.
@@ -1137,6 +1192,13 @@ class MigrationOrchestrator:
             
             # Start statistics tracking
             self.statistics.start()
+            
+            # Display disk space limit if configured
+            max_disk_space_gb = self.config['processing'].get('max_disk_space_gb')
+            if max_disk_space_gb:
+                logger.info(f"Disk space limit: {max_disk_space_gb} GB")
+            else:
+                logger.info("Disk space limit: Unlimited")
             
             # List files without downloading
             zip_file_list = self.downloader.list_zip_files(
@@ -1273,6 +1335,26 @@ class MigrationOrchestrator:
                 # Skip if we already downloaded this file (but haven't processed it yet)
                 if zip_file_path.exists():
                     continue
+                
+                # Check disk space limit before downloading
+                max_disk_space_gb = self.config['processing'].get('max_disk_space_gb')
+                if max_disk_space_gb:
+                    current_usage_gb = self._get_current_disk_usage_gb()
+                    file_size_gb = int(file_info.get('size', 0)) / (1024 ** 3) if file_info.get('size') else 0
+                    
+                    # Estimate total usage after download (zip + extracted + processed)
+                    # Rough estimate: zip size * 2.5 (zip + extracted + processed)
+                    estimated_usage_after = current_usage_gb + (file_size_gb * 2.5)
+                    
+                    if estimated_usage_after > max_disk_space_gb:
+                        logger.warning("=" * 60)
+                        logger.warning(f"⚠️  Disk space limit reached: {current_usage_gb:.1f} GB used / {max_disk_space_gb} GB limit")
+                        logger.warning(f"   Skipping download of {zip_name} ({file_size_gb:.1f} GB)")
+                        logger.warning(f"   Estimated usage after download: {estimated_usage_after:.1f} GB")
+                        logger.warning("   Processing existing files to free up space...")
+                        logger.warning("   You can increase the limit with --max-disk-space or in config.yaml")
+                        logger.warning("=" * 60)
+                        continue
                 
                 processed_count += 1
                 try:
@@ -1476,10 +1558,27 @@ def main():
         action='store_true',
         help='Retry previously failed uploads (skips download/extract/process steps)'
     )
+    parser.add_argument(
+        '--max-disk-space',
+        type=float,
+        default=None,
+        metavar='GB',
+        help='Maximum disk space to use in GB (overrides config file). Set to 0 for unlimited. Example: --max-disk-space 100'
+    )
     
     args = parser.parse_args()
     
     orchestrator = MigrationOrchestrator(args.config)
+    
+    # Override max_disk_space_gb from command line if provided
+    if args.max_disk_space is not None:
+        if args.max_disk_space == 0:
+            orchestrator.config['processing']['max_disk_space_gb'] = None
+            logger.info("Disk space limit: Unlimited (set via --max-disk-space 0)")
+        else:
+            orchestrator.config['processing']['max_disk_space_gb'] = args.max_disk_space
+            logger.info(f"Disk space limit: {args.max_disk_space} GB (set via --max-disk-space)")
+    
     orchestrator.run(use_sync_method=args.use_sync, retry_failed=args.retry_failed)
 
 
