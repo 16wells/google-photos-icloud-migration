@@ -49,6 +49,38 @@
         .pulse-ring {
             animation: pulse-ring 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
         }
+        
+        /* Custom slider styling */
+        .slider::-webkit-slider-thumb {
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #3b82f6;
+            cursor: pointer;
+            border: 2px solid white;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        
+        .slider::-moz-range-thumb {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #3b82f6;
+            cursor: pointer;
+            border: 2px solid white;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        
+        .slider::-webkit-slider-runnable-track {
+            height: 8px;
+            border-radius: 4px;
+        }
+        
+        .slider::-moz-range-track {
+            height: 8px;
+            border-radius: 4px;
+        }
     </style>
 </head>
 <body class="bg-gradient-to-br from-gray-50 to-gray-100 min-h-screen">
@@ -170,7 +202,13 @@
 
                 <!-- Configuration Card -->
                 <div class="bg-white rounded-lg shadow-sm p-6 border border-gray-200">
-                    <h2 class="text-xl font-semibold text-gray-900 mb-4">Configuration</h2>
+                    <div class="flex items-center justify-between mb-4">
+                        <h2 class="text-xl font-semibold text-gray-900">Configuration</h2>
+                        <button onclick="toggleConfigEditor()" class="px-3 py-1 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors">
+                            <span id="config-toggle-text">▼ Edit Config</span>
+                        </button>
+                    </div>
+                    
                     <div class="space-y-4">
                         <div>
                             <label class="block text-sm font-medium text-gray-700 mb-2">Config File Path</label>
@@ -180,6 +218,158 @@
                             <input type="checkbox" id="use-sync" class="w-4 h-4 text-primary-600 border-gray-300 rounded focus:ring-primary-500" checked>
                             <label for="use-sync" class="ml-2 text-sm text-gray-700">Use PhotoKit Sync Method (Recommended)</label>
                         </div>
+                        
+                        <!-- Expandable Config Editor -->
+                        <div id="config-editor" class="hidden border-t border-gray-200 pt-4 mt-4">
+                            <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
+                                <p class="text-xs text-blue-800">
+                                    <strong>⚠️ Note:</strong> Changes are saved to config.yaml. The migration must be restarted for changes to take effect.
+                                </p>
+                            </div>
+                            
+                            <div class="space-y-4">
+                                <!-- Google Drive Settings -->
+                                <div class="border border-gray-200 rounded-lg p-4">
+                                    <h3 class="font-semibold text-gray-900 mb-3 flex items-center">
+                                        <svg class="w-5 h-5 mr-2 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z"></path>
+                                        </svg>
+                                        Google Drive
+                                    </h3>
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-1">Credentials File</label>
+                                        <input type="text" id="config-google-creds" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent" placeholder="./credentials.json">
+                                    </div>
+                                </div>
+                                
+                                <!-- iCloud Settings -->
+                                <div class="border border-gray-200 rounded-lg p-4">
+                                    <h3 class="font-semibold text-gray-900 mb-3 flex items-center">
+                                        <svg class="w-5 h-5 mr-2 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z"></path>
+                                        </svg>
+                                        iCloud
+                                    </h3>
+                                    <div class="space-y-3">
+                                        <div>
+                                            <label class="block text-sm font-medium text-gray-700 mb-1">Apple ID</label>
+                                            <input type="email" id="config-icloud-email" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent" placeholder="your-email@icloud.com">
+                                        </div>
+                                        <div>
+                                            <label class="block text-sm font-medium text-gray-700 mb-1">Password</label>
+                                            <div class="relative">
+                                                <input type="password" id="config-icloud-password" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent pr-10" placeholder="••••••••">
+                                                <button type="button" onclick="togglePasswordVisibility()" class="absolute inset-y-0 right-0 flex items-center pr-3">
+                                                    <svg id="password-eye-icon" class="w-5 h-5 text-gray-400 hover:text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+                                                    </svg>
+                                                </button>
+                                            </div>
+                                            <p class="text-xs text-gray-500 mt-1">Use an app-specific password from appleid.apple.com</p>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <!-- Processing Settings -->
+                                <div class="border border-gray-200 rounded-lg p-4">
+                                    <h3 class="font-semibold text-gray-900 mb-3 flex items-center">
+                                        <svg class="w-5 h-5 mr-2 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                                        </svg>
+                                        Processing
+                                    </h3>
+                                    <div class="space-y-3">
+                                        <div>
+                                            <label class="block text-sm font-medium text-gray-700 mb-1">Base Directory</label>
+                                            <input type="text" id="config-base-dir" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent" placeholder="/Users/username/google-photos-migration">
+                                        </div>
+                                        
+                                        <!-- Disk Space Limit Slider -->
+                                        <div class="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                                            <label class="block text-sm font-medium text-gray-700 mb-2">
+                                                Maximum Disk Space Usage
+                                                <span id="disk-space-value" class="text-primary-600 font-semibold">Unlimited</span>
+                                            </label>
+                                            <input type="range" id="config-max-disk-space" min="0" max="500" step="10" value="0" 
+                                                   class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer slider"
+                                                   oninput="updateDiskSpaceValue(this.value)">
+                                            <div class="flex justify-between text-xs text-gray-600 mt-1">
+                                                <span>Unlimited</span>
+                                                <span>50 GB</span>
+                                                <span>100 GB</span>
+                                                <span>200 GB</span>
+                                                <span>500 GB</span>
+                                            </div>
+                                            <p class="text-xs text-gray-600 mt-2">
+                                                💡 Set a limit to prevent filling your entire disk. Downloads will pause when the limit is reached, and resume after cleanup.
+                                            </p>
+                                        </div>
+                                        
+                                        <div class="grid grid-cols-2 gap-3">
+                                            <div>
+                                                <label class="block text-sm font-medium text-gray-700 mb-1">Max Downloads</label>
+                                                <input type="number" id="config-max-downloads" min="1" max="10" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent" placeholder="3">
+                                            </div>
+                                            <div>
+                                                <label class="block text-sm font-medium text-gray-700 mb-1">Max Uploads</label>
+                                                <input type="number" id="config-max-uploads" min="1" max="10" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent" placeholder="5">
+                                            </div>
+                                        </div>
+                                        <div class="space-y-2">
+                                            <label class="flex items-center">
+                                                <input type="checkbox" id="config-verify-upload" class="w-4 h-4 text-primary-600 border-gray-300 rounded focus:ring-primary-500">
+                                                <span class="ml-2 text-sm text-gray-700">Verify after upload</span>
+                                            </label>
+                                            <label class="flex items-center">
+                                                <input type="checkbox" id="config-cleanup" class="w-4 h-4 text-primary-600 border-gray-300 rounded focus:ring-primary-500">
+                                                <span class="ml-2 text-sm text-gray-700">Cleanup after processing</span>
+                                            </label>
+                                            <label class="flex items-center">
+                                                <input type="checkbox" id="config-preserve-dates" class="w-4 h-4 text-primary-600 border-gray-300 rounded focus:ring-primary-500">
+                                                <span class="ml-2 text-sm text-gray-700">Preserve original dates</span>
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <!-- Logging Settings -->
+                                <div class="border border-gray-200 rounded-lg p-4">
+                                    <h3 class="font-semibold text-gray-900 mb-3 flex items-center">
+                                        <svg class="w-5 h-5 mr-2 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                                        </svg>
+                                        Logging
+                                    </h3>
+                                    <div class="space-y-3">
+                                        <div>
+                                            <label class="block text-sm font-medium text-gray-700 mb-1">Log Level</label>
+                                            <select id="config-log-level" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent">
+                                                <option value="DEBUG">DEBUG</option>
+                                                <option value="INFO" selected>INFO</option>
+                                                <option value="WARNING">WARNING</option>
+                                                <option value="ERROR">ERROR</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label class="block text-sm font-medium text-gray-700 mb-1">Log File</label>
+                                            <input type="text" id="config-log-file" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent" placeholder="migration.log">
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="flex items-center justify-between mt-4 pt-4 border-t border-gray-200">
+                                <button onclick="loadConfigForEditing()" class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors font-medium text-sm">
+                                    Reset to Current
+                                </button>
+                                <button onclick="saveConfig()" class="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors font-medium text-sm">
+                                    Save Configuration
+                                </button>
+                            </div>
+                        </div>
+                        
                         <button onclick="loadConfig()" class="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors font-medium">
                             Load Configuration
                         </button>
