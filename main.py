@@ -754,20 +754,50 @@ class MigrationOrchestrator:
             logger.info(f"Processing zip {zip_number}/{total_zips}: {zip_path.name}")
             logger.info("=" * 60)
             
-            # Check if already extracted (skip if so)
+            # Check current state and skip completed steps
             zip_state = self.state_manager.get_zip_state(zip_path.name)
-            if self.state_manager.is_zip_extracted(zip_path.name):
-                logger.info(f"⏭️  {zip_path.name} already extracted, skipping extraction step")
-                # Try to find the extracted directory
-                extracted_dir = self.base_dir / self.config['processing']['extracted_dir'] / zip_path.stem
-                if not extracted_dir.exists():
-                    logger.warning(f"   Extracted directory not found, will re-extract")
+            zip_state_data = self.state_manager._zip_state.get(zip_path.name, {})
+            
+            # Check if already converted - if so, skip extraction and conversion, go straight to upload
+            if self.state_manager.is_zip_converted(zip_path.name):
+                logger.info(f"⏭️  {zip_path.name} is already converted (state: {zip_state})")
+                logger.info(f"   Skipping extraction and conversion steps, proceeding directly to upload")
+                
+                # Try to find processed files
+                processed_dir = self.base_dir / self.config['processing']['processed_dir']
+                processed_files = list(processed_dir.glob("*"))
+                
+                if not processed_files:
+                    logger.warning(f"⚠️  No processed files found for {zip_path.name}")
+                    logger.warning(f"   Will need to re-extract and re-convert")
+                    # Fall through to extraction
                     extracted_dir = None
+                else:
+                    logger.info(f"   Found {len(processed_files)} processed files, proceeding to upload")
+                    # Skip extraction and conversion, go straight to upload
+                    extracted_dir = None  # Not needed for upload
+                    skip_to_upload = True
+            elif self.state_manager.is_zip_extracted(zip_path.name):
+                logger.info(f"⏭️  {zip_path.name} already extracted (state: {zip_state}), skipping extraction step")
+                # Try to find the extracted directory from state or default location
+                extracted_dir_path = zip_state_data.get('extracted_dir')
+                if extracted_dir_path:
+                    extracted_dir = Path(extracted_dir_path)
+                else:
+                    extracted_dir = self.base_dir / self.config['processing']['extracted_dir'] / zip_path.stem
+                
+                if not extracted_dir.exists():
+                    logger.warning(f"   Extracted directory not found at {extracted_dir}, will re-extract")
+                    extracted_dir = None
+                else:
+                    logger.info(f"   Using existing extracted directory: {extracted_dir}")
+                skip_to_upload = False
             else:
                 extracted_dir = None
+                skip_to_upload = False
             
             # Extract this zip file if not already extracted
-            if extracted_dir is None:
+            if extracted_dir is None and not skip_to_upload:
                 try:
                     extracted_dir = self.extractor.extract_zip(zip_path)
                     self.statistics.record_zip_extraction(zip_path.name, success=True)
@@ -814,80 +844,118 @@ class MigrationOrchestrator:
                     
                     return False
             
-            # Process metadata for this zip
-            media_json_pairs = self.extractor.identify_media_json_pairs(extracted_dir)
-            logger.info(f"Found {len(media_json_pairs)} media files in this zip")
-            
-            # Track statistics
-            total_media = len(media_json_pairs)
-            with_metadata = sum(1 for v in media_json_pairs.values() if v is not None)
-            self.statistics.record_media_files(total_media, with_metadata)
-            
-            if not media_json_pairs:
-                logger.warning(f"No media files found in {zip_path.name}, skipping")
-                return True
-            
-            # Merge metadata
-            processed_dir = self.base_dir / self.config['processing']['processed_dir']
-            processed_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Process metadata in batches
-            batch_size = self.config['processing']['batch_size']
-            all_files = list(media_json_pairs.keys())
-            
-            for i in range(0, len(all_files), batch_size):
-                batch = all_files[i:i + batch_size]
-                batch_pairs = {f: media_json_pairs[f] for f in batch}
-                logger.info(f"Processing metadata batch {i // batch_size + 1}/{(len(all_files) + batch_size - 1) // batch_size}")
-                self.metadata_merger.merge_all_metadata(batch_pairs, output_dir=processed_dir)
-            
-            # Mark as converted (metadata processed) in state (save immediately)
-            logger.info(f"💾 Marking {zip_path.name} as converted (metadata processed) in state")
-            self.state_manager.mark_zip_converted(zip_path.name)
-            
-            # Parse albums for this zip
-            parser = AlbumParser()
-            parser.parse_from_directory_structure(extracted_dir)
-            parser.parse_from_json_metadata(media_json_pairs)
-            albums = parser.get_all_albums()
-            self.statistics.record_albums(len(albums))
+            # If already converted, skip to upload step
+            if skip_to_upload:
+                logger.info(f"⏭️  Skipping extraction and conversion for {zip_path.name}, proceeding to upload")
+                processed_dir = self.base_dir / self.config['processing']['processed_dir']
+                processed_files = list(processed_dir.glob("*"))
+                
+                if not processed_files:
+                    logger.error(f"❌ No processed files found for {zip_path.name} - cannot proceed with upload")
+                    logger.error(f"   You may need to re-extract and re-convert this zip file")
+                    return False
+                
+                # Build file list from processed files (only image/video files)
+                from google_photos_icloud_migration.processor.extractor import MEDIA_EXTENSIONS
+                processed_file_paths = [
+                    Path(f) for f in processed_files 
+                    if f.is_file() and f.suffix.lower() in MEDIA_EXTENSIONS
+                ]
+                logger.info(f"Found {len(processed_file_paths)} processed files to upload")
+                
+                if not processed_file_paths:
+                    logger.error(f"❌ No valid processed files found for {zip_path.name}")
+                    logger.error(f"   Cannot proceed with upload - may need to re-extract")
+                    return False
+                
+                # Create a minimal file-to-album mapping (we don't have album info without extraction)
+                file_to_album = {}
+                albums = {}
+                processed_files = processed_file_paths  # Set for upload section
+                
+                # Try to get album info from file names or metadata if possible
+                # For now, upload without album info
+                logger.warning(f"⚠️  Album information not available for {zip_path.name} (skipped extraction)")
+                logger.warning(f"   Files will be uploaded without album assignments")
+                
+                # Skip to upload section
+                upload_ready = True
+            else:
+                upload_ready = False
+                
+            if not upload_ready:
+                logger.info(f"Found {len(media_json_pairs)} media files in this zip")
+                
+                # Track statistics
+                total_media = len(media_json_pairs)
+                with_metadata = sum(1 for v in media_json_pairs.values() if v is not None)
+                self.statistics.record_media_files(total_media, with_metadata)
+                
+                if not media_json_pairs:
+                    logger.warning(f"No media files found in {zip_path.name}, skipping")
+                    return True
+                
+                # Merge metadata
+                processed_dir = self.base_dir / self.config['processing']['processed_dir']
+                processed_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Process metadata in batches
+                batch_size = self.config['processing']['batch_size']
+                all_files = list(media_json_pairs.keys())
+                
+                for i in range(0, len(all_files), batch_size):
+                    batch = all_files[i:i + batch_size]
+                    batch_pairs = {f: media_json_pairs[f] for f in batch}
+                    logger.info(f"Processing metadata batch {i // batch_size + 1}/{(len(all_files) + batch_size - 1) // batch_size}")
+                    self.metadata_merger.merge_all_metadata(batch_pairs, output_dir=processed_dir)
+                
+                # Mark as converted (metadata processed) in state (save immediately)
+                logger.info(f"💾 Marking {zip_path.name} as converted (metadata processed) in state")
+                self.state_manager.mark_zip_converted(zip_path.name)
+                
+                # Parse albums for this zip
+                parser = AlbumParser()
+                parser.parse_from_directory_structure(extracted_dir)
+                parser.parse_from_json_metadata(media_json_pairs)
+                albums = parser.get_all_albums()
+                self.statistics.record_albums(len(albums))
+                
+                # Build file-to-album mapping from original files
+                original_file_to_album = {}
+                for album_name, files in albums.items():
+                    for file_path in files:
+                        original_file_to_album[file_path] = album_name
+                
+                # Get processed files and build mapping from processed files to albums
+                processed_files = []
+                file_to_album = {}  # Maps processed/original file paths to album names
+                skipped_files = []
+                for media_file in media_json_pairs.keys():
+                    processed_file = processed_dir / media_file.name
+                    if processed_file.exists():
+                        processed_files.append(processed_file)
+                        # Map processed file to album using original file's album
+                        album_name = original_file_to_album.get(media_file, '')
+                        if album_name:
+                            file_to_album[processed_file] = album_name
+                    elif media_file.exists():
+                        # Fall back to original file if processed file doesn't exist
+                        processed_files.append(media_file)
+                        # Map original file to album
+                        album_name = original_file_to_album.get(media_file, '')
+                        if album_name:
+                            file_to_album[media_file] = album_name
+                    else:
+                        # Neither processed nor original file exists - skip it
+                        skipped_files.append(media_file)
+                        logger.warning(f"File does not exist (processed or original), skipping: {media_file.name}")
+                
+                if skipped_files:
+                    logger.warning(f"Skipping {len(skipped_files)} missing files out of {len(media_json_pairs)} total")
             
             # Upload files from this zip
             if self.icloud_uploader is None:
                 self.setup_icloud_uploader(use_sync_method=use_sync_method)
-            
-            # Build file-to-album mapping from original files
-            original_file_to_album = {}
-            for album_name, files in albums.items():
-                for file_path in files:
-                    original_file_to_album[file_path] = album_name
-            
-            # Get processed files and build mapping from processed files to albums
-            processed_files = []
-            file_to_album = {}  # Maps processed/original file paths to album names
-            skipped_files = []
-            for media_file in media_json_pairs.keys():
-                processed_file = processed_dir / media_file.name
-                if processed_file.exists():
-                    processed_files.append(processed_file)
-                    # Map processed file to album using original file's album
-                    album_name = original_file_to_album.get(media_file, '')
-                    if album_name:
-                        file_to_album[processed_file] = album_name
-                elif media_file.exists():
-                    # Fall back to original file if processed file doesn't exist
-                    processed_files.append(media_file)
-                    # Map original file to album
-                    album_name = original_file_to_album.get(media_file, '')
-                    if album_name:
-                        file_to_album[media_file] = album_name
-                else:
-                    # Neither processed nor original file exists - skip it
-                    skipped_files.append(media_file)
-                    logger.warning(f"File does not exist (processed or original), skipping: {media_file.name}")
-            
-            if skipped_files:
-                logger.warning(f"Skipping {len(skipped_files)} missing files out of {len(media_json_pairs)} total")
             
             # Create verification failure callback
             def verification_failure_callback(failed_file_path: Path):
@@ -1276,6 +1344,7 @@ class MigrationOrchestrator:
             
             # Check state manager for already completed zips
             completed_zips = set()
+            converted_zips = set()  # Zips that are converted but not uploaded
             all_state_zips = set(self.state_manager._zip_state.keys())
             logger.debug(f"State contains {len(all_state_zips)} zip file entries")
             
@@ -1284,6 +1353,8 @@ class MigrationOrchestrator:
                 zip_state = self.state_manager.get_zip_state(zip_name)
                 if zip_state:
                     logger.debug(f"Zip {zip_name} has state: {zip_state}")
+                    if zip_state == ZipProcessingState.CONVERTED.value:
+                        converted_zips.add(zip_name)
                 if self.state_manager.is_zip_complete(zip_name):
                     completed_zips.add(zip_name)
             
@@ -1301,10 +1372,26 @@ class MigrationOrchestrator:
                     logger.info(f"  ... and {len(completed_zips) - 10} more completed zips")
                 logger.info("=" * 60)
                 logger.info("")
-            else:
+            
+            if converted_zips:
                 logger.info("")
-                logger.info("ℹ️  No previously completed zip files found in state")
-                logger.info("   All zip files will be processed")
+                logger.info("=" * 60)
+                logger.info(f"🔄 Found {len(converted_zips)} zip files that are converted but not uploaded")
+                logger.info("These will resume from upload step (skipping extraction/conversion)")
+                logger.info("=" * 60)
+                # Log first few converted zips for visibility
+                converted_list = sorted(list(converted_zips))[:10]
+                for zip_name in converted_list:
+                    logger.info(f"  ↻ {zip_name} (will resume upload)")
+                if len(converted_zips) > 10:
+                    logger.info(f"  ... and {len(converted_zips) - 10} more converted zips")
+                logger.info("=" * 60)
+                logger.info("")
+            
+            if not completed_zips and not converted_zips:
+                logger.info("")
+                logger.info("ℹ️  No previously processed zip files found in state")
+                logger.info("   All zip files will be processed from the beginning")
                 logger.info("")
             
             # Check for already-downloaded zip files
@@ -1418,6 +1505,31 @@ class MigrationOrchestrator:
                 if self.state_manager.is_zip_complete(zip_name):
                     logger.info(f"⏭️  Skipping {zip_name} - already completed (marked in state)")
                     continue
+                
+                # Check if zip is already converted - if so, check if we can resume upload
+                zip_state = self.state_manager.get_zip_state(zip_name)
+                if zip_state == ZipProcessingState.CONVERTED.value:
+                    processed_dir = self.base_dir / self.config['processing']['processed_dir']
+                    processed_files = list(processed_dir.glob("*"))
+                    if processed_files:
+                        logger.info(f"⏭️  {zip_name} is already converted and processed files exist")
+                        logger.info(f"   Skipping download - will proceed directly to upload")
+                        # Process it as an existing zip (even though zip file may not exist)
+                        # We'll handle the upload-only path in process_single_zip
+                        if zip_file_path.exists():
+                            # Add to existing_zips to process it
+                            existing_zips.append(zip_file_path)
+                        else:
+                            # Zip file doesn't exist but processed files do
+                            # We need the zip file to process, so we'll need to download it
+                            # But we can skip extraction/conversion
+                            logger.warning(f"⚠️  Zip file {zip_name} not found but processed files exist")
+                            logger.warning(f"   Will download zip file but skip extraction/conversion steps")
+                            # Continue to download below
+                    else:
+                        logger.info(f"ℹ️  {zip_name} is marked as converted but no processed files found")
+                        logger.info(f"   Will re-process from beginning")
+                        # Continue to download and process
                 
                 # Skip if we already downloaded this file (but haven't processed it yet)
                 if zip_file_path.exists():
