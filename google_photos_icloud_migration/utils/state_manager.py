@@ -72,11 +72,20 @@ class StateManager:
             try:
                 with open(self.zip_state_file, 'r') as f:
                     self._zip_state = json.load(f)
-                logger.debug(f"Loaded {len(self._zip_state)} zip states from {self.zip_state_file}")
+                logger.info(f"📂 Loaded state from: {self.zip_state_file}")
+                logger.info(f"   Found {len(self._zip_state)} zip files in state")
+                # Count completed zips
+                completed_count = sum(1 for data in self._zip_state.values() 
+                                    if data.get('state') == ZipProcessingState.UPLOADED.value)
+                if completed_count > 0:
+                    logger.info(f"   ✓ {completed_count} zip files already marked as completed")
             except (json.JSONDecodeError, IOError) as e:
-                logger.warning(f"Could not load zip state: {e}")
+                logger.warning(f"⚠️  Could not load zip state from {self.zip_state_file}: {e}")
+                logger.warning("   Starting with empty state (will reprocess all files)")
                 self._zip_state = {}
         else:
+            logger.info(f"📂 No existing state file found at: {self.zip_state_file}")
+            logger.info("   Starting fresh (all zip files will be processed)")
             self._zip_state = {}
         
         # Load file state
@@ -108,8 +117,10 @@ class StateManager:
         try:
             with open(self.zip_state_file, 'w') as f:
                 json.dump(self._zip_state, f, indent=2)
+            logger.debug(f"State saved to: {self.zip_state_file}")
         except IOError as e:
-            logger.error(f"Could not save zip state: {e}")
+            logger.error(f"❌ Could not save zip state to {self.zip_state_file}: {e}")
+            logger.error("   State changes may be lost! Check file permissions and disk space.")
     
     def _save_file_state(self):
         """Save file state to file."""

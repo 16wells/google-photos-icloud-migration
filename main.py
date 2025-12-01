@@ -23,14 +23,14 @@ from typing import Dict, List, Optional
 import yaml
 from tqdm import tqdm
 
-from drive_downloader import DriveDownloader
-from extractor import Extractor
-from metadata_merger import MetadataMerger
-from album_parser import AlbumParser
-from icloud_uploader import iCloudUploader, iCloudPhotosSyncUploader
-from migration_statistics import MigrationStatistics
-from report_generator import ReportGenerator
-from exceptions import ExtractionError
+from google_photos_icloud_migration.downloader.drive_downloader import DriveDownloader
+from google_photos_icloud_migration.processor.extractor import Extractor
+from google_photos_icloud_migration.processor.metadata_merger import MetadataMerger
+from google_photos_icloud_migration.parser.album_parser import AlbumParser
+from google_photos_icloud_migration.uploader.icloud_uploader import iCloudUploader, iCloudPhotosSyncUploader
+from migration_statistics import MigrationStatistics  # Keep root-level for now
+from report_generator import ReportGenerator  # Keep root-level for now
+from google_photos_icloud_migration.exceptions import ExtractionError
 from google_photos_icloud_migration.utils.state_manager import StateManager, ZipProcessingState
 
 logger = logging.getLogger(__name__)
@@ -307,9 +307,11 @@ class MigrationOrchestrator:
             photos_library_path = icloud_config.get('photos_library_path')
             if photos_library_path:
                 photos_library_path = Path(photos_library_path).expanduser()
+            # Note: iCloudPhotosSyncUploader doesn't support max_parallel_uploads
+            # PhotoKit handles concurrency internally
+            # Only pass photos_library_path - do NOT pass max_parallel_uploads
             self.icloud_uploader = iCloudPhotosSyncUploader(
-                photos_library_path=photos_library_path,
-                max_parallel_uploads=max_parallel_uploads
+                photos_library_path=photos_library_path
             )
         else:
             password = icloud_config.get('password', '').strip() if icloud_config.get('password') else ''
@@ -325,12 +327,13 @@ class MigrationOrchestrator:
             if not apple_id:
                 raise ValueError("Apple ID is required in config file (icloud.apple_id)")
             
+            # Note: iCloudUploader doesn't support max_parallel_uploads parameter
+            # It processes uploads sequentially
             self.icloud_uploader = iCloudUploader(
                 apple_id=apple_id,
                 password=password,
                 trusted_device_id=icloud_config.get('trusted_device_id'),
-                two_fa_code=icloud_config.get('two_fa_code'),  # Support 2FA code from config or env var
-                max_parallel_uploads=max_parallel_uploads
+                two_fa_code=icloud_config.get('two_fa_code')  # Support 2FA code from config or env var
             )
     
     def upload_to_icloud(self, media_json_pairs: Dict[Path, Optional[Path]],
@@ -751,11 +754,28 @@ class MigrationOrchestrator:
             logger.info(f"Processing zip {zip_number}/{total_zips}: {zip_path.name}")
             logger.info("=" * 60)
             
-            # Extract this zip file
-            try:
-                extracted_dir = self.extractor.extract_zip(zip_path)
-                self.statistics.record_zip_extraction(zip_path.name, success=True)
-            except (zipfile.BadZipFile, ExtractionError, RuntimeError) as e:
+            # Check if already extracted (skip if so)
+            zip_state = self.state_manager.get_zip_state(zip_path.name)
+            if self.state_manager.is_zip_extracted(zip_path.name):
+                logger.info(f"⏭️  {zip_path.name} already extracted, skipping extraction step")
+                # Try to find the extracted directory
+                extracted_dir = self.base_dir / self.config['processing']['extracted_dir'] / zip_path.stem
+                if not extracted_dir.exists():
+                    logger.warning(f"   Extracted directory not found, will re-extract")
+                    extracted_dir = None
+            else:
+                extracted_dir = None
+            
+            # Extract this zip file if not already extracted
+            if extracted_dir is None:
+                try:
+                    extracted_dir = self.extractor.extract_zip(zip_path)
+                    self.statistics.record_zip_extraction(zip_path.name, success=True)
+                    
+                    # Mark as extracted in state (save immediately)
+                    logger.info(f"💾 Marking {zip_path.name} as extracted in state")
+                    self.state_manager.mark_zip_extracted(zip_path.name, str(extracted_dir))
+                except (zipfile.BadZipFile, ExtractionError, RuntimeError) as e:
                 # Handle corrupted zip file
                 error_msg = str(e)
                 logger.error(f"❌ Corrupted zip file detected: {zip_path.name}")
@@ -775,6 +795,13 @@ class MigrationOrchestrator:
                         'size': str(zip_path.stat().st_size) if zip_path.exists() else '0'
                     }
                     self._save_corrupted_zip(minimal_info, zip_path, error_msg)
+                
+                # Mark as failed extraction
+                self.state_manager.mark_zip_failed(
+                    zip_path.name,
+                    ZipProcessingState.FAILED_EXTRACTION,
+                    error_msg
+                )
                 
                 # Delete corrupted file so it can be re-downloaded
                 logger.warning(f"⚠️  Deleting corrupted zip file: {zip_path.name}")
@@ -814,6 +841,10 @@ class MigrationOrchestrator:
                 logger.info(f"Processing metadata batch {i // batch_size + 1}/{(len(all_files) + batch_size - 1) // batch_size}")
                 self.metadata_merger.merge_all_metadata(batch_pairs, output_dir=processed_dir)
             
+            # Mark as converted (metadata processed) in state (save immediately)
+            logger.info(f"💾 Marking {zip_path.name} as converted (metadata processed) in state")
+            self.state_manager.mark_zip_converted(zip_path.name)
+            
             # Parse albums for this zip
             parser = AlbumParser()
             parser.parse_from_directory_structure(extracted_dir)
@@ -834,6 +865,7 @@ class MigrationOrchestrator:
             # Get processed files and build mapping from processed files to albums
             processed_files = []
             file_to_album = {}  # Maps processed/original file paths to album names
+            skipped_files = []
             for media_file in media_json_pairs.keys():
                 processed_file = processed_dir / media_file.name
                 if processed_file.exists():
@@ -842,12 +874,20 @@ class MigrationOrchestrator:
                     album_name = original_file_to_album.get(media_file, '')
                     if album_name:
                         file_to_album[processed_file] = album_name
-                else:
+                elif media_file.exists():
+                    # Fall back to original file if processed file doesn't exist
                     processed_files.append(media_file)
                     # Map original file to album
                     album_name = original_file_to_album.get(media_file, '')
                     if album_name:
                         file_to_album[media_file] = album_name
+                else:
+                    # Neither processed nor original file exists - skip it
+                    skipped_files.append(media_file)
+                    logger.warning(f"File does not exist (processed or original), skipping: {media_file.name}")
+            
+            if skipped_files:
+                logger.warning(f"Skipping {len(skipped_files)} missing files out of {len(media_json_pairs)} total")
             
             # Create verification failure callback
             def verification_failure_callback(failed_file_path: Path):
@@ -933,6 +973,16 @@ class MigrationOrchestrator:
                 )
             
             logger.info(f"Uploaded {successful}/{len(upload_results)} files from {zip_path.name}")
+            
+            # Mark as uploaded in state (save immediately, even if some files failed)
+            # Only mark as complete if all files uploaded successfully
+            if failed_count == 0:
+                logger.info(f"💾 Marking {zip_path.name} as uploaded (complete) in state")
+                self.state_manager.mark_zip_uploaded(zip_path.name)
+            else:
+                # Some files failed - mark as partial upload but don't mark as complete
+                logger.warning(f"⚠️  {zip_path.name} has {failed_count} failed uploads - not marking as complete")
+                # State remains at CONVERTED so it can be retried
             
             # Save failed uploads for retry
             failed_files = []
@@ -1193,6 +1243,14 @@ class MigrationOrchestrator:
             # Start statistics tracking
             self.statistics.start()
             
+            # Log state file location for debugging
+            state_file = self.state_manager.zip_state_file
+            logger.info(f"📂 State file location: {state_file}")
+            if state_file.exists():
+                logger.info(f"   State file exists: {state_file.stat().st_size} bytes")
+            else:
+                logger.info("   State file does not exist (will be created)")
+            
             # Display disk space limit if configured
             max_disk_space_gb = self.config['processing'].get('max_disk_space_gb')
             if max_disk_space_gb:
@@ -1218,17 +1276,35 @@ class MigrationOrchestrator:
             
             # Check state manager for already completed zips
             completed_zips = set()
+            all_state_zips = set(self.state_manager._zip_state.keys())
+            logger.debug(f"State contains {len(all_state_zips)} zip file entries")
+            
             for zip_info in zip_file_list:
                 zip_name = zip_info['name']
+                zip_state = self.state_manager.get_zip_state(zip_name)
+                if zip_state:
+                    logger.debug(f"Zip {zip_name} has state: {zip_state}")
                 if self.state_manager.is_zip_complete(zip_name):
                     completed_zips.add(zip_name)
             
             if completed_zips:
                 logger.info("")
                 logger.info("=" * 60)
-                logger.info(f"Found {len(completed_zips)} already-completed zip files in state")
-                logger.info("These will be skipped")
+                logger.info(f"✅ Found {len(completed_zips)} already-completed zip files in state")
+                logger.info("These will be skipped during processing")
                 logger.info("=" * 60)
+                # Log first few completed zips for visibility
+                completed_list = sorted(list(completed_zips))[:10]
+                for zip_name in completed_list:
+                    logger.info(f"  ✓ {zip_name} (already completed)")
+                if len(completed_zips) > 10:
+                    logger.info(f"  ... and {len(completed_zips) - 10} more completed zips")
+                logger.info("=" * 60)
+                logger.info("")
+            else:
+                logger.info("")
+                logger.info("ℹ️  No previously completed zip files found in state")
+                logger.info("   All zip files will be processed")
                 logger.info("")
             
             # Check for already-downloaded zip files
@@ -1266,12 +1342,25 @@ class MigrationOrchestrator:
             for existing_zip in existing_zips:
                 # Skip if already completed according to state
                 if self.state_manager.is_zip_complete(existing_zip.name):
-                    logger.info(f"Skipping {existing_zip.name} - already completed (marked in state)")
+                    logger.info(f"⏭️  Skipping {existing_zip.name} - already completed (marked in state)")
                     # Delete the zip file if it exists but is already completed
                     if existing_zip.exists():
-                        logger.info(f"Deleting already-completed zip file: {existing_zip.name}")
+                        logger.info(f"🗑️  Deleting already-completed zip file: {existing_zip.name}")
                         existing_zip.unlink()
                     continue
+                
+                # Check current state and log it
+                current_state = self.state_manager.get_zip_state(existing_zip.name)
+                if current_state:
+                    logger.info(f"📊 {existing_zip.name} current state: {current_state}")
+                    # If already downloaded but not extracted, mark as downloaded
+                    if current_state == ZipProcessingState.PENDING.value:
+                        logger.info(f"💾 Marking {existing_zip.name} as downloaded (file exists)")
+                        self.state_manager.set_zip_state(
+                            existing_zip.name,
+                            ZipProcessingState.DOWNLOADED,
+                            metadata={'file_size': existing_zip.stat().st_size if existing_zip.exists() else 0}
+                        )
                 
                 processed_count += 1
                 try:
@@ -1282,12 +1371,10 @@ class MigrationOrchestrator:
                     # Look up file_info for this existing zip
                     file_info = file_info_by_name.get(existing_zip.name)
                     
-                    # Process this zip file
+                    # Process this zip file (state is now tracked inside process_single_zip)
                     if self.process_single_zip(existing_zip, processed_count, total_zips, use_sync_method, file_info=file_info):
                         successful += 1
-                        
-                        # Mark as completed in state manager
-                        self.state_manager.mark_zip_uploaded(existing_zip.name)
+                        # State is already marked as uploaded inside process_single_zip
                         
                         # Cleanup zip file after successful processing to free up space
                         logger.info(f"Deleting zip file to free up disk space: {existing_zip.name}")
@@ -1329,7 +1416,7 @@ class MigrationOrchestrator:
                 
                 # Skip if already completed according to state
                 if self.state_manager.is_zip_complete(zip_name):
-                    logger.debug(f"Skipping {zip_name} - already completed (marked in state)")
+                    logger.info(f"⏭️  Skipping {zip_name} - already completed (marked in state)")
                     continue
                 
                 # Skip if we already downloaded this file (but haven't processed it yet)
@@ -1367,6 +1454,14 @@ class MigrationOrchestrator:
                         zip_file = self.downloader.download_single_zip(file_info, zip_dir)
                         file_size = zip_file.stat().st_size if zip_file.exists() else 0
                         self.statistics.record_zip_download(file_info['name'], size=file_size, success=True)
+                        
+                        # Mark as downloaded in state (save immediately)
+                        logger.info(f"💾 Marking {zip_file.name} as downloaded in state")
+                        self.state_manager.set_zip_state(
+                            zip_file.name, 
+                            ZipProcessingState.DOWNLOADED,
+                            metadata={'file_size': file_size}
+                        )
                     except Exception as download_error:
                         self.statistics.record_zip_download(
                             file_info['name'], 
@@ -1374,14 +1469,18 @@ class MigrationOrchestrator:
                             success=False, 
                             error=str(download_error)
                         )
+                        # Mark as failed download
+                        self.state_manager.mark_zip_failed(
+                            file_info['name'],
+                            ZipProcessingState.FAILED_DOWNLOAD,
+                            str(download_error)
+                        )
                         raise
                     
-                    # Process this zip file (file_info is already available)
+                    # Process this zip file (state is now tracked inside process_single_zip)
                     if self.process_single_zip(zip_file, processed_count, total_zips, use_sync_method, file_info=file_info):
                         successful += 1
-                        
-                        # Mark as completed in state manager
-                        self.state_manager.mark_zip_uploaded(zip_file.name)
+                        # State is already marked as uploaded inside process_single_zip
                         
                         # Cleanup zip file after successful processing to free up space
                         logger.info(f"Deleting zip file to free up disk space: {zip_file.name}")
