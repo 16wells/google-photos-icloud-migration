@@ -776,43 +776,43 @@ class MigrationOrchestrator:
                     logger.info(f"💾 Marking {zip_path.name} as extracted in state")
                     self.state_manager.mark_zip_extracted(zip_path.name, str(extracted_dir))
                 except (zipfile.BadZipFile, ExtractionError, RuntimeError) as e:
-                # Handle corrupted zip file
-                error_msg = str(e)
-                logger.error(f"❌ Corrupted zip file detected: {zip_path.name}")
-                logger.error(f"   Error: {error_msg}")
-                
-                # Track statistics
-                self.statistics.record_zip_corrupted(zip_path.name, error_msg)
-                
-                # Save to corrupted zips file if we have file_info
-                if file_info:
-                    self._save_corrupted_zip(file_info, zip_path, error_msg)
-                else:
-                    # Try to create minimal file_info from zip_path
-                    minimal_info = {
-                        'id': 'unknown',
-                        'name': zip_path.name,
-                        'size': str(zip_path.stat().st_size) if zip_path.exists() else '0'
-                    }
-                    self._save_corrupted_zip(minimal_info, zip_path, error_msg)
-                
-                # Mark as failed extraction
-                self.state_manager.mark_zip_failed(
-                    zip_path.name,
-                    ZipProcessingState.FAILED_EXTRACTION,
-                    error_msg
-                )
-                
-                # Delete corrupted file so it can be re-downloaded
-                logger.warning(f"⚠️  Deleting corrupted zip file: {zip_path.name}")
-                logger.warning(f"   This file has been saved to corrupted_zips.json and will be re-downloaded")
-                try:
-                    zip_path.unlink()
-                    logger.info(f"   ✓ Deleted corrupted file: {zip_path.name}")
-                except Exception as delete_error:
-                    logger.error(f"   Could not delete corrupted file: {delete_error}")
-                
-                return False
+                    # Handle corrupted zip file
+                    error_msg = str(e)
+                    logger.error(f"❌ Corrupted zip file detected: {zip_path.name}")
+                    logger.error(f"   Error: {error_msg}")
+                    
+                    # Track statistics
+                    self.statistics.record_zip_corrupted(zip_path.name, error_msg)
+                    
+                    # Save to corrupted zips file if we have file_info
+                    if file_info:
+                        self._save_corrupted_zip(file_info, zip_path, error_msg)
+                    else:
+                        # Try to create minimal file_info from zip_path
+                        minimal_info = {
+                            'id': 'unknown',
+                            'name': zip_path.name,
+                            'size': str(zip_path.stat().st_size) if zip_path.exists() else '0'
+                        }
+                        self._save_corrupted_zip(minimal_info, zip_path, error_msg)
+                    
+                    # Mark as failed extraction
+                    self.state_manager.mark_zip_failed(
+                        zip_path.name,
+                        ZipProcessingState.FAILED_EXTRACTION,
+                        error_msg
+                    )
+                    
+                    # Delete corrupted file so it can be re-downloaded
+                    logger.warning(f"⚠️  Deleting corrupted zip file: {zip_path.name}")
+                    logger.warning(f"   This file has been saved to corrupted_zips.json and will be re-downloaded")
+                    try:
+                        zip_path.unlink()
+                        logger.info(f"   ✓ Deleted corrupted file: {zip_path.name}")
+                    except Exception as delete_error:
+                        logger.error(f"   Could not delete corrupted file: {delete_error}")
+                    
+                    return False
             
             # Process metadata for this zip
             media_json_pairs = self.extractor.identify_media_json_pairs(extracted_dir)
