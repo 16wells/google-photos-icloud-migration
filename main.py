@@ -1527,11 +1527,58 @@ class MigrationOrchestrator:
                 logger.info("   All zip files will be processed from the beginning")
                 logger.info("")
             
+            # Setup iCloud uploader once (before processing zips)
+            self.setup_icloud_uploader(use_sync_method=use_sync_method)
+            
+            # Create mapping from file name to file_info for looking up existing zips
+            file_info_by_name = {file_info['name']: file_info for file_info in zip_file_list}
+            
+            successful = 0
+            failed = 0
+            total_zips = len(zip_file_list)
+            processed_count = 0
+            
+            # ZERO: Process converted zips that have processed files (upload-only, no zip file needed)
+            # This MUST run BEFORE _find_existing_zips to catch zips that don't need zip files
+            converted_zips_processed = set()
+            for zip_info in zip_file_list:
+                zip_name = zip_info['name']
+                zip_state = self.state_manager.get_zip_state(zip_name)
+                if zip_state == ZipProcessingState.CONVERTED.value:
+                    processed_dir = self.base_dir / self.config['processing']['processed_dir']
+                    processed_files = list(processed_dir.glob("*"))
+                    if processed_files:
+                        # This zip is converted and has processed files - upload directly (no zip file needed)
+                        processed_count += 1
+                        try:
+                            logger.info("=" * 60)
+                            logger.info(f"Processing converted zip {processed_count}/{total_zips}: {zip_name} (upload-only, no zip file needed)")
+                            logger.info("=" * 60)
+                            
+                            if self._process_upload_only(zip_name, processed_count, total_zips, use_sync_method):
+                                successful += 1
+                                converted_zips_processed.add(zip_name)
+                            else:
+                                failed += 1
+                            
+                            # Ask user if they want to continue after each zip (unless they chose "Continue All")
+                            if not self._skip_continue_prompts:
+                                if not self._ask_continue_after_zip(processed_count, total_zips):
+                                    logger.info("Migration stopped by user after zip file processing.")
+                                    self._generate_final_report(successful, total_zips)
+                                    return
+                        except Exception as e:
+                            failed += 1
+                            logger.error(f"Error processing upload-only for {zip_name}: {e}", exc_info=True)
+            
             # Check for already-downloaded zip files
-            # But first, filter out zips that are converted and have processed files (they don't need zip files)
+            # Filter out zips that are converted and have processed files (they don't need zip files)
             zips_needing_download = []
             for file_info in zip_file_list:
                 zip_name = file_info['name']
+                # Skip if we already processed it in upload-only mode
+                if zip_name in converted_zips_processed:
+                    continue
                 zip_state = self.state_manager.get_zip_state(zip_name)
                 if zip_state == ZipProcessingState.CONVERTED.value:
                     processed_dir = self.base_dir / self.config['processing']['processed_dir']
@@ -1560,50 +1607,6 @@ class MigrationOrchestrator:
             logger.info("  - Download → Extract → Process metadata → Upload → Cleanup")
             logger.info("  (This approach minimizes disk space usage)")
             logger.info("")
-            
-            # Setup iCloud uploader once (before processing zips)
-            self.setup_icloud_uploader(use_sync_method=use_sync_method)
-            
-            # Create mapping from file name to file_info for looking up existing zips
-            file_info_by_name = {file_info['name']: file_info for file_info in zip_file_list}
-            
-            successful = 0
-            failed = 0
-            total_zips = len(zip_file_list)
-            processed_count = 0
-            
-            # ZERO: Process converted zips that have processed files (upload-only, no zip file needed)
-            for zip_info in zip_file_list:
-                zip_name = zip_info['name']
-                zip_state = self.state_manager.get_zip_state(zip_name)
-                if zip_state == ZipProcessingState.CONVERTED.value:
-                    processed_dir = self.base_dir / self.config['processing']['processed_dir']
-                    processed_files = list(processed_dir.glob("*"))
-                    if processed_files:
-                        # This zip is converted and has processed files - upload directly
-                        zip_file_path = zip_dir / zip_name
-                        if not zip_file_path.exists():
-                            # Zip file doesn't exist but processed files do - perfect for upload-only
-                            processed_count += 1
-                            try:
-                                logger.info("=" * 60)
-                                logger.info(f"Processing converted zip {processed_count}/{total_zips}: {zip_name} (upload-only, no zip file)")
-                                logger.info("=" * 60)
-                                
-                                if self._process_upload_only(zip_name, processed_count, total_zips, use_sync_method):
-                                    successful += 1
-                                else:
-                                    failed += 1
-                                
-                                # Ask user if they want to continue after each zip (unless they chose "Continue All")
-                                if not self._skip_continue_prompts:
-                                    if not self._ask_continue_after_zip(processed_count, total_zips):
-                                        logger.info("Migration stopped by user after zip file processing.")
-                                        self._generate_final_report(successful, total_zips)
-                                        return
-                            except Exception as e:
-                                failed += 1
-                                logger.error(f"Error processing upload-only for {zip_name}: {e}", exc_info=True)
             
             # FIRST: Process already-downloaded zip files to free up space
             for existing_zip in existing_zips:
@@ -1686,19 +1689,22 @@ class MigrationOrchestrator:
                     logger.info(f"⏭️  Skipping {zip_name} - already completed (marked in state)")
                     continue
                 
-                # Skip if zip is already converted and we've already processed it (upload-only)
-                # This handles the case where we processed it in the "ZERO" step above
+                # Skip if we already processed this in upload-only mode (ZERO step)
+                if zip_name in converted_zips_processed:
+                    logger.debug(f"Skipping {zip_name} - already processed in upload-only mode")
+                    continue
+                
+                # Skip if zip is already converted and has processed files (but wasn't processed yet)
+                # This means zip file exists and we should process it (will skip extraction/conversion)
                 zip_state = self.state_manager.get_zip_state(zip_name)
                 if zip_state == ZipProcessingState.CONVERTED.value:
                     processed_dir = self.base_dir / self.config['processing']['processed_dir']
                     processed_files = list(processed_dir.glob("*"))
-                    if processed_files:
-                        # Check if we already processed this in upload-only mode
-                        # If zip file doesn't exist, we already handled it above
-                        if not zip_file_path.exists():
-                            logger.debug(f"Skipping {zip_name} - already processed in upload-only mode")
-                            continue
-                        # If zip file exists, we'll process it normally (will skip extraction/conversion)
+                    if processed_files and not zip_file_path.exists():
+                        # Processed files exist but zip doesn't - should have been handled in ZERO step
+                        # But if we get here, skip it to avoid re-downloading
+                        logger.info(f"⏭️  Skipping {zip_name} - has processed files, no zip file needed")
+                        continue
                 
                 # Skip if we already downloaded this file (but haven't processed it yet)
                 if zip_file_path.exists():
