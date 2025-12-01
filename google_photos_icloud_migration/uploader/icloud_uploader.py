@@ -2072,6 +2072,85 @@ class iCloudPhotosSyncUploader:
             logger.debug(traceback.format_exc())
             return None
     
+    def _convert_heic_to_jpeg(self, heic_path: Path) -> Optional[Path]:
+        """
+        Convert HEIC file to JPEG format as a fallback when HEIC upload fails.
+        
+        Uses sips (macOS built-in) or ImageMagick/ffmpeg if available.
+        
+        Args:
+            heic_path: Path to HEIC file
+            
+        Returns:
+            Path to converted JPEG file, or None if conversion failed
+        """
+        try:
+            # Try using sips (macOS built-in, fastest and most reliable)
+            jpeg_path = heic_path.with_suffix('.jpg')
+            
+            import subprocess
+            result = subprocess.run(
+                ['sips', '-s', 'format', 'jpeg', str(heic_path), '--out', str(jpeg_path)],
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+            
+            if result.returncode == 0 and jpeg_path.exists():
+                logger.debug(f"Successfully converted {heic_path.name} to JPEG using sips")
+                return jpeg_path
+            else:
+                logger.debug(f"sips conversion failed: {result.stderr}")
+                
+        except FileNotFoundError:
+            logger.debug("sips not found, trying alternative conversion methods")
+        except subprocess.TimeoutExpired:
+            logger.warning(f"HEIC to JPEG conversion timed out for {heic_path.name}")
+        except Exception as e:
+            logger.debug(f"Error converting HEIC with sips: {e}")
+        
+        # Fallback: Try ImageMagick if available
+        try:
+            import subprocess
+            jpeg_path = heic_path.with_suffix('.jpg')
+            result = subprocess.run(
+                ['convert', str(heic_path), str(jpeg_path)],
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+            
+            if result.returncode == 0 and jpeg_path.exists():
+                logger.debug(f"Successfully converted {heic_path.name} to JPEG using ImageMagick")
+                return jpeg_path
+        except FileNotFoundError:
+            logger.debug("ImageMagick not found")
+        except Exception as e:
+            logger.debug(f"Error converting HEIC with ImageMagick: {e}")
+        
+        # Last resort: Try ffmpeg
+        try:
+            import subprocess
+            jpeg_path = heic_path.with_suffix('.jpg')
+            result = subprocess.run(
+                ['ffmpeg', '-i', str(heic_path), '-q:v', '2', str(jpeg_path), '-y'],
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+            
+            if result.returncode == 0 and jpeg_path.exists():
+                logger.debug(f"Successfully converted {heic_path.name} to JPEG using ffmpeg")
+                return jpeg_path
+        except FileNotFoundError:
+            logger.debug("ffmpeg not found")
+        except Exception as e:
+            logger.debug(f"Error converting HEIC with ffmpeg: {e}")
+        
+        logger.warning(f"Could not convert {heic_path.name} to JPEG - no conversion tools available")
+        logger.warning(f"  Install one of: sips (macOS built-in), ImageMagick, or ffmpeg")
+        return None
+    
     def _get_file_identifier(self, file_path: Path) -> str:
         """Generate a unique identifier for a file (same as iCloudUploader)."""
         try:
@@ -2186,7 +2265,17 @@ class iCloudPhotosSyncUploader:
             # Check permission
             auth_status = self.PHPhotoLibrary.authorizationStatus()
             if auth_status not in (self.PHAuthorizationStatusAuthorized, self.PHAuthorizationStatusLimited):
-                logger.error("Photo library write permission not granted")
+                logger.error("❌ Photo library write permission not granted")
+                logger.error("")
+                logger.error("To fix this:")
+                logger.error("1. Open System Settings (or System Preferences on older macOS)")
+                logger.error("2. Go to Privacy & Security > Photos")
+                logger.error("3. Find 'Terminal' (or 'Python') in the list")
+                logger.error("4. Enable 'Add Photos Only' or 'Read and Write' permission")
+                logger.error("")
+                logger.error("Alternatively, you can:")
+                logger.error("- Run the script again and grant permission when prompted")
+                logger.error("- Or manually grant permission in System Settings before running")
                 return False
             
             # Convert file path to NSURL
@@ -2289,7 +2378,10 @@ class iCloudPhotosSyncUploader:
             
             # Wait for completion with progress logging
             from Foundation import NSRunLoop, NSDefaultRunLoopMode, NSDate
-            timeout = 30
+            # HEIC files may take longer to process, especially large ones or those with complex metadata
+            # Increase timeout for HEIC files (60s) vs other formats (30s)
+            is_heic = file_ext in {'.heic', '.heif'}
+            timeout = 60 if is_heic else 30
             start_time = time.time()
             last_log_time = start_time
             
@@ -2318,11 +2410,37 @@ class iCloudPhotosSyncUploader:
                         logger.error(f"   {file_ext.upper()} files are not supported by Photos")
                         logger.error(f"   Please convert to .mov or .mp4 format first")
                         logger.error(f"   Example: ffmpeg -i '{file_path}' '{file_path.with_suffix('.mov')}'")
+                    elif is_heic:
+                        logger.error(f"   HEIC file failed to import - may be corrupted or have incompatible metadata")
+                        logger.error(f"   Attempting automatic conversion to JPEG as fallback...")
+                        # Try converting HEIC to JPEG and retry
+                        try:
+                            converted_path = self._convert_heic_to_jpeg(file_path)
+                            if converted_path and converted_path.exists():
+                                logger.info(f"✓ Converted {file_path.name} to JPEG: {converted_path.name}")
+                                # Retry upload with converted file
+                                return self.upload_file(converted_path, album_name)
+                            else:
+                                logger.error(f"   Conversion failed - file may be corrupted")
+                        except Exception as conv_error:
+                            logger.error(f"   Conversion error: {conv_error}")
+                            logger.error(f"   You may need to manually convert HEIC files to JPEG")
                     else:
                         logger.error(f"   File extension: {file_ext}")
                         logger.error(f"   Please convert to a supported format (.jpg, .png, .mov, .mp4, etc.)")
                 else:
                     logger.error(f"Failed to copy {file_path.name} to Photos library: {error}")
+                    # For HEIC files, also try conversion on other errors
+                    if is_heic:
+                        logger.warning(f"   HEIC file failed with error - attempting JPEG conversion as fallback...")
+                        try:
+                            converted_path = self._convert_heic_to_jpeg(file_path)
+                            if converted_path and converted_path.exists():
+                                logger.info(f"✓ Converted {file_path.name} to JPEG: {converted_path.name}")
+                                # Retry upload with converted file
+                                return self.upload_file(converted_path, album_name)
+                        except Exception as conv_error:
+                            logger.debug(f"   Conversion fallback failed: {conv_error}")
                 
                 import traceback
                 logger.debug(traceback.format_exc())
@@ -2330,6 +2448,17 @@ class iCloudPhotosSyncUploader:
             
             if not completed[0]:
                 logger.error(f"Copy operation timed out for {file_path.name} after {timeout}s")
+                # For HEIC files, try converting to JPEG as fallback
+                if is_heic:
+                    logger.warning(f"   HEIC file timed out - attempting JPEG conversion as fallback...")
+                    try:
+                        converted_path = self._convert_heic_to_jpeg(file_path)
+                        if converted_path and converted_path.exists():
+                            logger.info(f"✓ Converted {file_path.name} to JPEG: {converted_path.name}")
+                            # Retry upload with converted file
+                            return self.upload_file(converted_path, album_name)
+                    except Exception as conv_error:
+                        logger.debug(f"   Conversion fallback failed: {conv_error}")
                 return False
             
             if success_ref[0]:
