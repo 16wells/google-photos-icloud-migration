@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 # Example: Test for extractor module
 def test_extractor_initialization():
     """Test that Extractor can be initialized."""
-    from extractor import Extractor
+    from google_photos_icloud_migration.processor.extractor import Extractor
     
     base_dir = Path("/tmp/test-extraction")
     extractor = Extractor(base_dir)
@@ -20,16 +20,16 @@ def test_extractor_initialization():
 
 def test_extractor_extracted_dir_created(tmp_path):
     """Test that extracted directory is created."""
-    from extractor import Extractor
+    from google_photos_icloud_migration.processor.extractor import Extractor
     
     extractor = Extractor(tmp_path)
     assert extractor.extracted_dir.exists()
 
 
-@patch('extractor.zipfile.ZipFile')
+@patch('google_photos_icloud_migration.processor.extractor.zipfile.ZipFile')
 def test_extract_zip_file(mock_zipfile, tmp_path):
     """Test zip file extraction with mocked zipfile."""
-    from extractor import Extractor
+    from google_photos_icloud_migration.processor.extractor import Extractor
     
     # Create mock zip file
     mock_zip = Mock()
@@ -48,7 +48,7 @@ def test_extract_zip_file(mock_zipfile, tmp_path):
 # Example: Test error handling
 def test_invalid_zip_file(tmp_path):
     """Test that invalid zip files are handled gracefully."""
-    from extractor import Extractor
+    from google_photos_icloud_migration.processor.extractor import Extractor
     import zipfile
     
     extractor = Extractor(tmp_path)

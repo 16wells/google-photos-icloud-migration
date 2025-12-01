@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch, MagicMock
 
 import pytest
 
-from drive_downloader import DriveDownloader, SCOPES
+from google_photos_icloud_migration.downloader.drive_downloader import DriveDownloader, SCOPES
 
 
 class TestDriveDownloader:
@@ -16,8 +16,8 @@ class TestDriveDownloader:
     
     def test_initialization(self, credentials_file, tmp_path):
         """Test that DriveDownloader can be initialized."""
-        with patch('drive_downloader.build') as mock_build, \
-             patch('drive_downloader.Credentials') as mock_creds:
+        with patch('google_photos_icloud_migration.downloader.drive_downloader.build') as mock_build, \
+             patch('google_photos_icloud_migration.downloader.drive_downloader.Credentials') as mock_creds:
             # Mock credentials
             mock_creds.from_authorized_user_file.return_value = None
             mock_creds_obj = Mock()

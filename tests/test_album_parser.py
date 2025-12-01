@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from album_parser import AlbumParser
+from google_photos_icloud_migration.parser.album_parser import AlbumParser
 
 
 class TestAlbumParser:

@@ -1016,6 +1016,13 @@ class MigrationOrchestrator:
             else:
                 upload_ready = False
                 
+                # Identify media files and their JSON metadata pairs
+                if extracted_dir and extracted_dir.exists():
+                    media_json_pairs = self.extractor.identify_media_json_pairs(extracted_dir)
+                else:
+                    logger.error(f"❌ Extracted directory not found for {zip_path.name}")
+                    return False
+                
             if not upload_ready:
                 logger.info(f"Found {len(media_json_pairs)} media files in this zip")
                 

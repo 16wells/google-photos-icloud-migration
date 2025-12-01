@@ -222,26 +222,66 @@ class MetadataMerger:
         Args:
             media_json_pairs: Dictionary mapping media files to JSON files
             output_dir: Optional output directory (if None, modifies files in place)
-        
+            
         Returns:
             Dictionary mapping media files to success status
         """
         results = {}
         
+        # Initialize video converter if needed (lazy import to avoid requiring ffmpeg if not needed)
+        video_converter = None
+        
         for media_file, json_file in tqdm(media_json_pairs.items(), 
                                           desc="Merging metadata"):
+            # Check if video conversion is needed
+            needs_conversion = False
+            try:
+                from google_photos_icloud_migration.processor.video_converter import VideoConverter, UNSUPPORTED_VIDEO_FORMATS
+                if media_file.suffix.lower() in UNSUPPORTED_VIDEO_FORMATS:
+                    needs_conversion = True
+                    if video_converter is None:
+                        video_converter = VideoConverter(output_format='mov', preserve_metadata=True)
+            except ImportError:
+                # Video converter not available, skip conversion
+                pass
+            except Exception as e:
+                logger.debug(f"Error checking video conversion: {e}")
+            
             if output_dir:
-                # Copy file to output directory first
-                output_file = output_dir / media_file.name
-                import shutil
-                shutil.copy2(media_file, output_file)
-                media_file = output_file
+                if needs_conversion and video_converter:
+                    # Convert video to supported format in output directory
+                    converted_file, success = video_converter.convert_video(media_file, output_dir=output_dir)
+                    if success and converted_file != media_file:
+                        # Use the converted file for metadata merging
+                        media_file = converted_file
+                        logger.debug(f"Using converted video: {converted_file.name}")
+                    elif not success:
+                        logger.warning(f"Video conversion failed for {media_file.name}, copying original (will fail upload)")
+                        # Copy original - upload will fail with clear error
+                        import shutil
+                        output_file = output_dir / media_file.name
+                        shutil.copy2(media_file, output_file)
+                        media_file = output_file
+                    else:
+                        # File already converted or conversion not needed
+                        import shutil
+                        output_file = output_dir / media_file.name
+                        if not output_file.exists():
+                            shutil.copy2(media_file, output_file)
+                        media_file = output_file if output_file.exists() else media_file
+                else:
+                    # Copy file to output directory first (regular files or conversion disabled)
+                    output_file = output_dir / media_file.name
+                    import shutil
+                    shutil.copy2(media_file, output_file)
+                    media_file = output_file
             
             try:
                 self.merge_metadata(media_file, json_file)
                 results[media_file] = True
-            except MetadataError as e:
-                logger.error(f"Metadata merge failed: {e}")
+            except (MetadataError, ValueError) as e:
+                # ValueError can come from validate_subprocess_path for problematic characters
+                logger.warning(f"Skipping file with problematic path: {media_file.name} - {e}")
                 results[media_file] = False
         
         successful = sum(1 for v in results.values() if v)

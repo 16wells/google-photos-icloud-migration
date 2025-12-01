@@ -8,7 +8,7 @@ from unittest.mock import patch, Mock
 
 import pytest
 
-from metadata_merger import MetadataMerger
+from google_photos_icloud_migration.processor.metadata_merger import MetadataMerger
 
 
 class TestMetadataMerger:

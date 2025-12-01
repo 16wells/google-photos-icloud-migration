@@ -131,6 +131,14 @@ socket.on('disconnect', () => {
 
 socket.on('status_update', (data) => {
     updateStatus(data.status, data.error, data.log_level, data.paused_for_retries);
+    
+    // Update log file info if provided
+    if (data.log_file) {
+        const logFileInfo = document.getElementById('log-file-path');
+        if (logFileInfo) {
+            logFileInfo.textContent = data.log_file;
+        }
+    }
 });
 
 socket.on('progress_update', (data) => {
@@ -482,57 +490,56 @@ function updateLogLevel() {
     }
 }
 
-async function startMigration() {
+async function startMonitoring() {
     configPath = elements.configPathInput.value || 'config.yaml';
-    const useSyncMethod = elements.useSyncCheckbox.checked;
-    currentLogLevel = elements.logLevelSelect.value;
     
     try {
-        const response = await apiRequest('/api/migration/start', {
+        const response = await apiRequest('/api/monitoring/start', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-                config_path: configPath,
-                use_sync_method: useSyncMethod,
-                log_level: currentLogLevel
+                config_path: configPath
             })
         });
         
         const data = await response.json();
         
         if (!response.ok) {
-            showError(data.error || 'Failed to start migration');
+            showError(data.error || 'Failed to start monitoring');
             return;
         }
         
-        addLog('info', 'Migration started');
-        updateStatus('running');
+        addLog('info', 'Monitoring started');
+        if (data.log_file) {
+            const logFileInfo = document.getElementById('log-file-path');
+            if (logFileInfo) {
+                logFileInfo.textContent = data.log_file;
+            }
+        }
+        refreshStatus();
     } catch (error) {
-        showError(`Error starting migration: ${error.message}`);
+        showError(`Error starting monitoring: ${error.message}`);
     }
 }
 
-async function stopMigration() {
+// Check if migration process is running
+async function checkProcessStatus() {
     try {
-        const response = await apiRequest('/api/migration/stop', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            }
-        });
-        
+        const response = await apiRequest('/api/monitoring/process');
         const data = await response.json();
         
-        if (!response.ok) {
-            showError(data.error || 'Failed to stop migration');
-            return;
+        if (data.running) {
+            addLog('info', `Migration process detected (PID: ${data.process.pid})`);
+            return true;
+        } else {
+            addLog('info', 'No migration process detected. Start migration from terminal.');
+            return false;
         }
-        
-        addLog('warning', 'Stop request sent');
     } catch (error) {
-        showError(`Error stopping migration: ${error.message}`);
+        console.error('Error checking process status:', error);
+        return false;
     }
 }
 
@@ -1001,6 +1008,9 @@ function copyToClipboard(text) {
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
+    // Start monitoring on page load
+    startMonitoring();
+    checkProcessStatus();
     refreshStatus();
     loadFailedUploads();
     checkServerStatus();

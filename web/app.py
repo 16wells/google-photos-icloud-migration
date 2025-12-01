@@ -1,6 +1,6 @@
 """
 Flask web application for Google Photos to iCloud Photos Migration Tool.
-Provides a modern web UI with real-time progress updates.
+Provides a monitoring dashboard that watches terminal migration processes.
 """
 import json
 import logging
@@ -19,9 +19,19 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 import yaml
 
-from google_photos_icloud_migration.cli.main import MigrationOrchestrator, MigrationStoppedException
-from google_photos_icloud_migration.exceptions import ConfigurationError, CorruptedZipException
 from google_photos_icloud_migration.utils.security import validate_config_path, validate_file_path
+
+# Import monitoring services
+try:
+    from web.services.log_monitor import LogFileMonitor
+    from web.services.process_monitor import find_migration_process, is_migration_running
+except ImportError:
+    # Fallback for development
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    from web.services.log_monitor import LogFileMonitor
+    from web.services.process_monitor import find_migration_process, is_migration_running
 
 logger = logging.getLogger(__name__)
 
@@ -67,58 +77,107 @@ API_KEY = os.getenv('WEB_API_KEY', None)
 if not API_KEY:
     logger.warning("WEB_API_KEY not set - API endpoints are unprotected. Set WEB_API_KEY environment variable for production.")
 
-# Global state
-migration_state = {
-    'status': 'idle',  # idle, running, paused, stopped, error, completed
-    'progress': {
-        'phase': None,
-        'current': 0,
-        'total': 0,
-        'percentage': 0,
-        'message': '',
-        'current_activity': None,  # Current operation happening now
-        'last_update_time': None
-    },
-            'statistics': {
-                'zip_files_total': 0,
-                'zip_files_processed': 0,
-                'media_files_found': 0,
-                'media_files_uploaded': 0,
-                'media_files_awaiting_upload': 0,
-                'albums_identified': 0,
-                'failed_uploads': 0,
-                'corrupted_zips': 0,
-                'start_time': None,
-                'elapsed_time': 0
-            },
-    'error': None,
-    'orchestrator': None,
-    'stop_requested': False,
-    'thread': None,
-    'log_level': 'DEBUG',
-    'web_handler': None,
-    'proceed_after_retries': False,
-    'paused_for_retries': False,
-    'corrupted_zip_redownloaded': False,
-    'waiting_for_corrupted_zip_redownload': False,
-    'skip_corrupted_zip': False
+# Global monitoring state
+log_monitor: Optional[LogFileMonitor] = None
+monitoring_config = {
+    'log_file': None,  # Will be set from config
+    'config_path': 'config.yaml'
 }
+
+
+def get_log_file_path(config_path: str = 'config.yaml') -> Optional[Path]:
+    """Get log file path from config."""
+    try:
+        config_file = validate_config_path(config_path)
+        if not config_file.exists():
+            return None
+        
+        with open(config_file, 'r') as f:
+            config = yaml.safe_load(f)
+        
+        log_file = config.get('logging', {}).get('file', 'migration.log')
+        log_path = Path(log_file)
+        
+        # If relative, try to resolve relative to config file or base_dir
+        if not log_path.is_absolute():
+            base_dir = config.get('processing', {}).get('base_dir', '.')
+            log_path = Path(base_dir) / log_path
+        
+        return log_path.resolve() if log_path.exists() else None
+    except Exception as e:
+        logger.warning(f"Could not determine log file path: {e}")
+        return None
+
+
+def initialize_log_monitor(config_path: str = 'config.yaml'):
+    """Initialize log file monitor."""
+    global log_monitor
+    
+    if log_monitor:
+        log_monitor.stop()
+    
+    log_file_path = get_log_file_path(config_path)
+    if not log_file_path:
+        logger.warning("Could not find log file, monitoring disabled")
+        return None
+    
+    def on_log_update(line: str, state: Dict):
+        """Callback when log monitor finds new entries."""
+        socketio.emit('log_message', {
+            'level': 'INFO',
+            'message': line,
+            'timestamp': time.time()
+        })
+        socketio.emit('terminal_output', {
+            'data': line + '\n',
+            'stream': 'stdout',
+            'timestamp': time.time()
+        })
+        socketio.emit('progress_update', state['progress'])
+        socketio.emit('statistics_update', state['statistics'])
+        socketio.emit('status_update', {
+            'status': state['status'],
+            'error': state.get('error'),
+            'log_level': 'DEBUG',
+            'paused_for_retries': False
+        })
+    
+    log_monitor = LogFileMonitor(log_file_path, on_update=on_log_update)
+    log_monitor.start()
+    monitoring_config['log_file'] = str(log_file_path)
+    monitoring_config['config_path'] = config_path
+    logger.info(f"Initialized log monitor for: {log_file_path}")
+    return log_monitor
 
 
 def emit_progress_update():
     """Emit progress update to all connected clients."""
-    socketio.emit('progress_update', migration_state['progress'])
-    socketio.emit('statistics_update', migration_state['statistics'])
+    if log_monitor:
+        state = log_monitor.get_state()
+        socketio.emit('progress_update', state['progress'])
+        socketio.emit('statistics_update', state['statistics'])
 
 
 def emit_status_update():
     """Emit status update to all connected clients."""
-    socketio.emit('status_update', {
-        'status': migration_state['status'],
-        'error': migration_state['error'],
-        'log_level': migration_state.get('log_level', 'DEBUG'),
-        'paused_for_retries': migration_state.get('paused_for_retries', False)
-    })
+    if log_monitor:
+        state = log_monitor.get_state()
+        socketio.emit('status_update', {
+            'status': state['status'],
+            'error': state.get('error'),
+            'log_level': 'DEBUG',
+            'paused_for_retries': False
+        })
+    else:
+        # Check if process is running
+        process_info = find_migration_process()
+        status = 'running' if process_info else 'idle'
+        socketio.emit('status_update', {
+            'status': status,
+            'error': None,
+            'log_level': 'DEBUG',
+            'paused_for_retries': False
+        })
 
 
 class TerminalStreamCapture:
@@ -860,30 +919,65 @@ def save_config():
 @limiter.limit("30 per minute")
 @require_api_key
 def get_status():
-    """Get current migration status."""
-    # Update disk space if orchestrator is available
-    disk_space_info = migration_state['statistics'].get('disk_space')
-    if not disk_space_info and migration_state.get('orchestrator'):
-        orchestrator = migration_state['orchestrator']
-        if hasattr(orchestrator, 'base_dir') and orchestrator.base_dir:
-            disk_space_info = get_disk_space_info(orchestrator.base_dir)
-            migration_state['statistics']['disk_space'] = disk_space_info
+    """Get current migration status from log monitor."""
+    config_path = request.args.get('config_path', monitoring_config.get('config_path', 'config.yaml'))
     
-    # Ensure progress includes all fields
-    progress = migration_state.get('progress', {})
-    if 'current_activity' not in progress:
-        progress['current_activity'] = None
-    if 'last_update_time' not in progress:
-        progress['last_update_time'] = None
+    # Initialize monitor if not already done or config changed
+    if not log_monitor or monitoring_config.get('config_path') != config_path:
+        initialize_log_monitor(config_path)
     
-    return jsonify({
-        'status': migration_state['status'],
-        'progress': progress,
-        'statistics': migration_state['statistics'],
-        'error': migration_state['error'],
-        'log_level': migration_state.get('log_level', 'DEBUG'),
-        'paused_for_retries': migration_state.get('paused_for_retries', False)
-    })
+    # Get state from log monitor
+    if log_monitor:
+        state = log_monitor.get_state()
+        # Also check if process is running
+        process_info = find_migration_process()
+        if process_info and state['status'] == 'idle':
+            # Process is running but no recent log activity
+            state['status'] = 'running'
+        
+        return jsonify({
+            'status': state['status'],
+            'progress': state['progress'],
+            'statistics': state['statistics'],
+            'error': state.get('error'),
+            'log_level': 'DEBUG',
+            'paused_for_retries': False,
+            'monitoring': True,
+            'log_file': monitoring_config.get('log_file')
+        })
+    else:
+        # Fallback: check if process is running
+        process_info = find_migration_process()
+        status = 'running' if process_info else 'idle'
+        return jsonify({
+            'status': status,
+            'progress': {
+                'phase': None,
+                'current': 0,
+                'total': 0,
+                'percentage': 0,
+                'message': 'Monitoring not initialized',
+                'current_activity': None,
+                'last_update_time': None
+            },
+            'statistics': {
+                'zip_files_total': 0,
+                'zip_files_processed': 0,
+                'media_files_found': 0,
+                'media_files_uploaded': 0,
+                'media_files_awaiting_upload': 0,
+                'albums_identified': 0,
+                'failed_uploads': 0,
+                'corrupted_zips': 0,
+                'start_time': None,
+                'elapsed_time': 0
+            },
+            'error': None,
+            'log_level': 'DEBUG',
+            'paused_for_retries': False,
+            'monitoring': True,
+            'log_file': monitoring_config.get('log_file')
+        })
 
 
 @app.route('/api/disk-space', methods=['GET'])
@@ -928,18 +1022,13 @@ def get_disk_space():
         return jsonify({'error': 'An error occurred getting disk space information'}), 500
 
 
-@app.route('/api/migration/start', methods=['POST'])
-@limiter.limit("3 per hour")
+@app.route('/api/monitoring/start', methods=['POST'])
+@limiter.limit("10 per minute")
 @require_api_key
-def start_migration():
-    """Start migration."""
-    if migration_state['status'] == 'running':
-        return jsonify({'error': 'Migration is already running'}), 400
-    
+def start_monitoring():
+    """Start monitoring a migration process."""
     data = request.json or {}
     config_path = data.get('config_path', 'config.yaml')
-    use_sync_method = data.get('use_sync_method', False)
-    log_level = data.get('log_level', 'DEBUG')
     
     try:
         config_file = validate_config_path(config_path)
@@ -950,64 +1039,37 @@ def start_migration():
         logger.warning(f"Invalid config path attempt: {e}")
         return jsonify({'error': 'Invalid configuration path'}), 400
     
-    # Validate log level
-    valid_levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR']
-    if log_level.upper() not in valid_levels:
-        return jsonify({'error': f'Invalid log level: {log_level}. Must be one of {valid_levels}'}), 400
-    
-    # Reset state
-    migration_state['status'] = 'idle'
-    migration_state['error'] = None
-    migration_state['stop_requested'] = False
-    migration_state['log_level'] = log_level.upper()
-    migration_state['progress'] = {
-        'phase': None,
-        'current': 0,
-        'total': 0,
-        'percentage': 0,
-        'message': '',
-        'current_activity': None,
-        'last_update_time': None
-    }
-    migration_state['statistics'] = {
-        'zip_files_total': 0,
-        'zip_files_processed': 0,
-        'media_files_found': 0,
-        'media_files_uploaded': 0,
-        'media_files_awaiting_upload': 0,
-        'albums_identified': 0,
-        'failed_uploads': 0,
-        'corrupted_zips': 0,
-        'start_time': None,
-        'elapsed_time': 0
-    }
-    
-    # Start migration in background thread
-    thread = threading.Thread(
-        target=run_migration,
-        args=(config_path, use_sync_method, log_level.upper()),
-        daemon=True
-    )
-    thread.start()
-    migration_state['thread'] = thread
-    
-    return jsonify({'success': True, 'message': 'Migration started'})
+    # Initialize log monitor
+    monitor = initialize_log_monitor(config_path)
+    if monitor:
+        return jsonify({
+            'success': True,
+            'message': 'Monitoring started',
+            'log_file': monitoring_config.get('log_file')
+        })
+    else:
+        return jsonify({
+            'success': False,
+            'error': 'Could not initialize log monitoring. Make sure the log file exists or a migration is running.'
+        }), 400
 
 
-@app.route('/api/migration/stop', methods=['POST'])
-@limiter.limit("10 per hour")
+@app.route('/api/monitoring/process', methods=['GET'])
+@limiter.limit("30 per minute")
 @require_api_key
-def stop_migration():
-    """Stop migration."""
-    if migration_state['status'] != 'running':
-        return jsonify({'error': 'No migration is currently running'}), 400
-    
-    migration_state['stop_requested'] = True
-    if migration_state['orchestrator']:
-        # Signal orchestrator to stop
-        pass  # The orchestrator will check stop_requested flag
-    
-    return jsonify({'success': True, 'message': 'Stop request sent'})
+def get_process_info():
+    """Get information about running migration process."""
+    process_info = find_migration_process()
+    if process_info:
+        return jsonify({
+            'running': True,
+            'process': process_info
+        })
+    else:
+        return jsonify({
+            'running': False,
+            'process': None
+        })
 
 
 @app.route('/api/migration/log-level', methods=['POST'])
@@ -1476,8 +1538,23 @@ def redownload_corrupted_zip():
 def handle_connect():
     """Handle client connection."""
     logger.info('Client connected')
+    
+    # Initialize monitoring if not already done
+    if not log_monitor:
+        initialize_log_monitor(monitoring_config.get('config_path', 'config.yaml'))
+    
     emit_status_update()
     emit_progress_update()
+    
+    # Send recent logs if available
+    if log_monitor:
+        recent_logs = log_monitor.get_recent_logs(50)
+        for log_entry in recent_logs:
+            emit('log_message', {
+                'level': 'INFO',
+                'message': log_entry['line'],
+                'timestamp': log_entry['timestamp']
+            })
 
 
 @socketio.on('disconnect')
@@ -1498,5 +1575,14 @@ if __name__ == '__main__':
     debug_mode = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
     if debug_mode:
         logger.warning("⚠️  DEBUG MODE ENABLED - Do not use in production!")
+    
+    # Initialize monitoring on startup
+    try:
+        initialize_log_monitor('config.yaml')
+        logger.info("Log monitoring initialized")
+    except Exception as e:
+        logger.warning(f"Could not initialize log monitoring on startup: {e}")
+        logger.info("Monitoring will be initialized when a client connects")
+    
     socketio.run(app, host='0.0.0.0', port=5000, debug=debug_mode)
 

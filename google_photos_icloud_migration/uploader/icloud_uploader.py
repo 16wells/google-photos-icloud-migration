@@ -2201,8 +2201,47 @@ class iCloudPhotosSyncUploader:
                     logger.warning(f"Could not get/create album '{album_name}', saving without album")
             
             # Determine if file is a video based on extension
-            video_extensions = {'.mp4', '.mov', '.avi', '.m4v', '.3gp', '.mkv'}
-            is_video = file_path.suffix.lower() in video_extensions
+            # Note: Photos framework only supports .mp4, .mov, .m4v, .3gp
+            # .avi and .mkv need to be converted first
+            supported_video_extensions = {'.mp4', '.mov', '.m4v', '.3gp'}
+            unsupported_video_extensions = {'.avi', '.mkv', '.webm', '.flv', '.wmv', '.divx', '.xvid'}
+            file_ext = file_path.suffix.lower()
+            is_video = file_ext in supported_video_extensions or file_ext in unsupported_video_extensions
+            
+            # Auto-convert unsupported video formats
+            original_file_path = file_path
+            if file_ext in unsupported_video_extensions:
+                try:
+                    from google_photos_icloud_migration.processor.video_converter import VideoConverter
+                    
+                    # Create converter (use 'mov' format for best Photos compatibility)
+                    converter = VideoConverter(output_format='mov', preserve_metadata=True)
+                    
+                    # Convert to a temporary location (same directory, different extension)
+                    converted_path, success = converter.convert_video(
+                        file_path,
+                        output_dir=file_path.parent
+                    )
+                    
+                    if success and converted_path != file_path:
+                        logger.info(f"✓ Converted {file_path.name} → {converted_path.name}")
+                        file_path = converted_path
+                        file_ext = file_path.suffix.lower()
+                        # Update file_url for the converted file
+                        abs_path = str(file_path.absolute())
+                        file_url = self.NSURL.fileURLWithPath_(abs_path)
+                    elif not success:
+                        logger.error(f"❌ Failed to convert {original_file_path.name}")
+                        logger.error(f"   Photos framework does not support {file_ext} files")
+                        logger.error(f"   Please install ffmpeg to enable automatic conversion")
+                        logger.error(f"   Or manually convert: ffmpeg -i '{original_file_path}' '{original_file_path.with_suffix('.mov')}'")
+                        return False
+                except Exception as e:
+                    logger.error(f"❌ Error during video conversion for {original_file_path.name}: {e}")
+                    logger.error(f"   Photos framework does not support {file_ext} files")
+                    logger.error(f"   Please install ffmpeg to enable automatic conversion")
+                    logger.error(f"   Or manually convert: ffmpeg -i '{original_file_path}' '{original_file_path.with_suffix('.mov')}'")
+                    return False
             
             # Save photo/video with metadata preservation
             success_ref = [False]
@@ -2268,7 +2307,23 @@ class iCloudPhotosSyncUploader:
                 time.sleep(0.1)
             
             if error_ref[0]:
-                logger.error(f"Failed to copy {file_path.name} to Photos library: {error_ref[0]}")
+                error = error_ref[0]
+                error_str = str(error)
+                
+                # Check for unsupported format error (error code 3302)
+                if '3302' in error_str or 'PHPhotosErrorDomain' in error_str:
+                    logger.error(f"❌ Unsupported file format: {file_path.name}")
+                    logger.error(f"   Photos framework cannot import this file format")
+                    if file_ext in {'.avi', '.mkv', '.webm', '.flv'}:
+                        logger.error(f"   {file_ext.upper()} files are not supported by Photos")
+                        logger.error(f"   Please convert to .mov or .mp4 format first")
+                        logger.error(f"   Example: ffmpeg -i '{file_path}' '{file_path.with_suffix('.mov')}'")
+                    else:
+                        logger.error(f"   File extension: {file_ext}")
+                        logger.error(f"   Please convert to a supported format (.jpg, .png, .mov, .mp4, etc.)")
+                else:
+                    logger.error(f"Failed to copy {file_path.name} to Photos library: {error}")
+                
                 import traceback
                 logger.debug(traceback.format_exc())
                 return False
@@ -2287,7 +2342,7 @@ class iCloudPhotosSyncUploader:
                     logger.debug(f"  Waiting for asset to be available in Photos library...")
                     # Wait a moment for the asset to be available, then fetch it
                     from Foundation import NSRunLoop, NSDefaultRunLoopMode, NSDate
-                    import time
+                    # Note: time is already imported at module level
                     for i in range(10):  # Wait up to 1 second for asset to appear
                         try:
                             from Photos import PHAsset
@@ -2660,7 +2715,8 @@ class iCloudPhotosSyncUploader:
     def upload_files_batch(self, file_paths: List[Path],
                           albums: Optional[Dict[Path, str]] = None,
                           verify_after_upload: bool = True,
-                          on_verification_failure: Optional[Callable[[Path], None]] = None) -> Dict[Path, bool]:
+                          on_verification_failure: Optional[Callable[[Path], None]] = None,
+                          on_upload_success: Optional[Callable[[Path], None]] = None) -> Dict[Path, bool]:
         """
         Upload multiple files in a batch, organized by album.
         
@@ -2672,15 +2728,34 @@ class iCloudPhotosSyncUploader:
             albums: Optional mapping of files to album names
             verify_after_upload: If True, verify each file after upload
             on_verification_failure: Optional callback function(file_path) called when verification fails
+            on_upload_success: Optional callback function(file_path) called when upload succeeds
         
         Returns:
             Dictionary mapping file paths to success status
         """
         results = {}
         
+        # Filter out files that don't exist before processing
+        existing_files = []
+        missing_files = []
+        for file_path in file_paths:
+            if file_path.exists():
+                existing_files.append(file_path)
+            else:
+                missing_files.append(file_path)
+                logger.warning(f"File does not exist, skipping: {file_path}")
+                results[file_path] = False
+        
+        if missing_files:
+            logger.warning(f"Skipping {len(missing_files)} missing files out of {len(file_paths)} total")
+        
+        if not existing_files:
+            logger.warning("No existing files to upload")
+            return results
+        
         # Group files by album for more efficient processing
         files_by_album: Dict[Optional[str], List[Path]] = {}
-        for file_path in file_paths:
+        for file_path in existing_files:
             album_name = albums.get(file_path) if albums else None
             if album_name not in files_by_album:
                 files_by_album[album_name] = []
@@ -2699,6 +2774,12 @@ class iCloudPhotosSyncUploader:
             
             # Save files in this album
             for file_path in tqdm(files, desc=f"Saving to Photos{album_name and f' ({album_name})' or ''}"):
+                # Double-check file exists right before upload (in case it was deleted)
+                if not file_path.exists():
+                    logger.warning(f"File no longer exists, skipping: {file_path}")
+                    results[file_path] = False
+                    continue
+                
                 success = self.upload_file(file_path, album_name)
                 
                 # Verify upload if requested
@@ -2709,6 +2790,13 @@ class iCloudPhotosSyncUploader:
                         if on_verification_failure:
                             on_verification_failure(file_path)
                         success = False
+                
+                # Call success callback if provided and upload was successful
+                if success and on_upload_success:
+                    try:
+                        on_upload_success(file_path)
+                    except Exception as e:
+                        logger.warning(f"Error in upload success callback for {file_path.name}: {e}")
                 
                 results[file_path] = success
         

@@ -14,11 +14,11 @@ from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 import yaml
 
-from extractor import Extractor
-from metadata_merger import MetadataMerger
-from album_parser import AlbumParser
-from icloud_uploader import iCloudPhotosSyncUploader
-from drive_downloader import DriveDownloader
+from google_photos_icloud_migration.processor.extractor import Extractor
+from google_photos_icloud_migration.processor.metadata_merger import MetadataMerger
+from google_photos_icloud_migration.parser.album_parser import AlbumParser
+from google_photos_icloud_migration.uploader.icloud_uploader import iCloudPhotosSyncUploader
+from google_photos_icloud_migration.downloader.drive_downloader import DriveDownloader
 
 logger = logging.getLogger(__name__)
 

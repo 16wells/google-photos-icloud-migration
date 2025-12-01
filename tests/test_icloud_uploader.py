@@ -13,13 +13,13 @@ try:
 except ImportError:
     PHOTOKIT_AVAILABLE = False
 
-from exceptions import AuthenticationError, UploadError
-from icloud_uploader import iCloudUploader
+from google_photos_icloud_migration.exceptions import AuthenticationError, UploadError
+from google_photos_icloud_migration.uploader.icloud_uploader import iCloudUploader
 
 # Import PhotoKit uploader - may not be available if pyobjc-framework-Photos isn't installed
 PHOTOS_SYNC_UPLOADER_AVAILABLE = True
 try:
-    from icloud_uploader import iCloudPhotosSyncUploader
+    from google_photos_icloud_migration.uploader.icloud_uploader import iCloudPhotosSyncUploader
 except (ImportError, RuntimeError, AttributeError):
     PHOTOS_SYNC_UPLOADER_AVAILABLE = False
     iCloudPhotosSyncUploader = None  # Will be skipped in tests

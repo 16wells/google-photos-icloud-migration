@@ -90,8 +90,8 @@
             <div class="bg-white rounded-lg shadow-sm p-6 border border-gray-200">
                 <div class="flex items-center justify-between">
                     <div>
-                        <h1 class="text-3xl font-bold text-gray-900">Google Photos to iCloud Migration</h1>
-                        <p class="text-gray-600 mt-1">Migrate your photos and videos with ease</p>
+                        <h1 class="text-3xl font-bold text-gray-900">Migration Monitor</h1>
+                        <p class="text-gray-600 mt-1">Monitor your terminal migration process in real-time</p>
                     </div>
                     <div class="flex items-center space-x-2" id="status-badge">
                         <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-gray-100 text-gray-800">
@@ -150,13 +150,26 @@
                                 </div>
                             </div>
                         </div>
-                        <div class="mt-4 flex space-x-2" id="control-buttons">
-                            <button id="start-btn" onclick="startMigration()" class="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors font-medium">
-                                Start Migration
-                            </button>
-                            <button id="stop-btn" onclick="stopMigration()" disabled class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors font-medium opacity-50 cursor-not-allowed">
-                                Stop Migration
-                            </button>
+                        <div class="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg" id="monitoring-info">
+                            <div class="flex items-start space-x-2">
+                                <svg class="w-5 h-5 text-blue-600 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+                                </svg>
+                                <div class="flex-1">
+                                    <p class="text-sm font-medium text-blue-900">Monitoring Mode</p>
+                                    <p class="text-sm text-blue-700 mt-1">
+                                        This dashboard monitors your terminal migration process. 
+                                        To start a migration, run it from the terminal:
+                                    </p>
+                                    <code class="text-xs text-blue-800 mt-2 block bg-blue-100 p-2 rounded">
+                                        python main.py --config config.yaml
+                                    </code>
+                                    <p class="text-xs text-blue-600 mt-2" id="log-file-info">
+                                        Monitoring log file: <span id="log-file-path">-</span>
+                                    </p>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>

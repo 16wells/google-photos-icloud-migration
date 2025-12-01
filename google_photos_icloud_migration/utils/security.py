@@ -134,6 +134,10 @@ def validate_subprocess_path(file_path: Path) -> None:
     """
     Validate file path before passing to subprocess to prevent command injection.
     
+    Note: When using subprocess.run() with a list of arguments (not shell=True),
+    parentheses and most characters are safe. This validation is conservative
+    but allows common filename characters like parentheses.
+    
     Args:
         file_path: Path to validate
         
@@ -142,11 +146,25 @@ def validate_subprocess_path(file_path: Path) -> None:
     """
     path_str = str(file_path)
     
-    # Check for dangerous characters that could be used for command injection
-    dangerous_chars = [';', '|', '&', '$', '`', '(', ')', '<', '>', '\n', '\r']
+    # Check for truly dangerous characters that could cause issues even with list args
+    # Note: Parentheses () are safe when using subprocess.run() with list arguments
+    # as Python handles them properly. Only reject characters that could cause
+    # actual problems (null bytes, newlines in paths, shell metacharacters if shell=True)
+    dangerous_chars = ['\x00', '\n', '\r']  # Null bytes and newlines are problematic
+    
+    # Also check for characters that could be dangerous if shell=True is used
+    # (though we don't use shell=True, this is a safety measure)
+    shell_dangerous = [';', '|', '&', '$', '`', '<', '>']
+    
     for char in dangerous_chars:
         if char in path_str:
             raise ValueError(f"Invalid character in file path: {char}")
+    
+    # Warn about shell-dangerous characters but don't fail (they're safe with list args)
+    for char in shell_dangerous:
+        if char in path_str:
+            logger.warning(f"File path contains potentially problematic character '{char}': {file_path}")
+            # Don't raise - these are safe with subprocess.run(list) but log for awareness
     
     # Ensure path is absolute and normalized
     if not file_path.is_absolute():
@@ -155,6 +173,10 @@ def validate_subprocess_path(file_path: Path) -> None:
     # Ensure it's a file (not directory)
     if not file_path.is_file():
         raise ValueError(f"Path must be a file: {file_path}")
+
+
+
+
 
 
 

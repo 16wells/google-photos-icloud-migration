@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from extractor import Extractor, MEDIA_EXTENSIONS
+from google_photos_icloud_migration.processor.extractor import Extractor, MEDIA_EXTENSIONS
 
 
 class TestExtractor:
