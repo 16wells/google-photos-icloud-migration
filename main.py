@@ -19,7 +19,7 @@ import logging
 import os
 import zipfile
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 import yaml
 from tqdm import tqdm
 
@@ -601,12 +601,13 @@ class MigrationOrchestrator:
         except IOError as e:
             logger.error(f"Could not save corrupted zips file: {e}")
     
-    def retry_failed_uploads(self, use_sync_method: bool = False) -> Dict[Path, bool]:
+    def retry_failed_uploads(self, use_sync_method: bool = False, redownload_zips: bool = False) -> Dict[Path, bool]:
         """
         Retry uploading files that previously failed.
         
         Args:
             use_sync_method: Whether to use Photos library sync method
+            redownload_zips: If True, re-download and re-process zip files that contain failed uploads
             
         Returns:
             Dictionary mapping file paths to upload success status
@@ -631,25 +632,245 @@ class MigrationOrchestrator:
             logger.info("No failed uploads to retry.")
             return {}
         
-        logger.info(f"Found {len(failed_data)} files to retry")
+        logger.info(f"Found {len(failed_data)} files in failed uploads list")
+        logger.info("")
+        logger.info("This will:")
+        logger.info("  1. Check if processed files still exist (with path corrections)")
+        logger.info("  2. Look for missing files in extracted directories (using state file)")
+        logger.info("  3. Re-process files found in extracted directories")
+        if redownload_zips:
+            logger.info("  4. Re-download and re-process zip files containing failed uploads")
+        logger.info("  5. Retry uploading all available files")
+        logger.info("")
         
         # Setup uploader if needed
         if self.icloud_uploader is None:
             self.setup_icloud_uploader(use_sync_method=use_sync_method)
         
-        # Group files by album
+        # Group files by album and handle missing files
         files_by_album: Dict[str, List[Path]] = {}
+        missing_files = []
+        reprocess_needed = []
+        
+        extracted_dir = self.base_dir / self.config['processing']['extracted_dir']
+        processed_dir = self.base_dir / self.config['processing']['processed_dir']
+        
+        # Helper function to correct path if it points to wrong base directory
+        def correct_path(original_path: Path) -> Path:
+            """Correct path if it points to wrong base directory."""
+            original_str = str(original_path)
+            # If path points to /tmp/ but base_dir is different, correct it
+            if '/tmp/google-photos-migration' in original_str:
+                # Replace /tmp/google-photos-migration with actual base_dir
+                corrected_str = original_str.replace('/tmp/google-photos-migration', str(self.base_dir))
+                return Path(corrected_str)
+            return original_path
+        
+        # Helper function to find file in extracted directories using state file
+        def find_in_extracted_dirs(file_name: str) -> Optional[Path]:
+            """Find file in extracted directories using state file paths."""
+            # First check current extracted_dir structure
+            if extracted_dir.exists():
+                for extracted_subdir in extracted_dir.iterdir():
+                    if extracted_subdir.is_dir():
+                        potential_file = extracted_subdir / file_name
+                        if potential_file.exists():
+                            return potential_file
+                        # Check subdirectories
+                        for subdir in extracted_subdir.rglob('*'):
+                            if subdir.is_file() and subdir.name == file_name:
+                                return subdir
+            
+            # Also check state file for extracted_dir paths
+            for zip_name, zip_data in self.state_manager._zip_state.items():
+                extracted_dir_path = zip_data.get('extracted_dir')
+                if extracted_dir_path:
+                    extracted_path = Path(extracted_dir_path)
+                    # Correct path if needed
+                    if not extracted_path.exists() and '/tmp/google-photos-migration' in str(extracted_path):
+                        corrected_path = Path(str(extracted_path).replace('/tmp/google-photos-migration', str(self.base_dir)))
+                        if corrected_path.exists():
+                            extracted_path = corrected_path
+                    
+                    if extracted_path.exists():
+                        potential_file = extracted_path / file_name
+                        if potential_file.exists():
+                            return potential_file
+                        # Check subdirectories
+                        for subdir in extracted_path.rglob('*'):
+                            if subdir.is_file() and subdir.name == file_name:
+                                return subdir
+            return None
+        
         for file_data in failed_data.values():
-            file_path = Path(file_data['file'])
+            original_file_path = Path(file_data['file'])
             album_name = file_data.get('album', '')
             
-            if not file_path.exists():
-                logger.warning(f"File no longer exists: {file_path}")
-                continue
+            # Try corrected path first
+            file_path = correct_path(original_file_path)
             
-            if album_name not in files_by_album:
-                files_by_album[album_name] = []
-            files_by_album[album_name].append(file_path)
+            if file_path.exists():
+                # File exists, can retry directly
+                if album_name not in files_by_album:
+                    files_by_album[album_name] = []
+                files_by_album[album_name].append(file_path)
+            else:
+                # File doesn't exist - try to find it in extracted directory
+                file_name = file_path.name
+                missing_files.append((file_path, file_name, album_name))
+                
+                # Search for the file in extracted directories (using state file)
+                found_in_extracted = find_in_extracted_dirs(file_name)
+                
+                if found_in_extracted:
+                    # Found in extracted - need to re-process
+                    logger.info(f"Found {file_name} in extracted directory, will re-process")
+                    reprocess_needed.append((found_in_extracted, file_name, album_name))
+                else:
+                    logger.debug(f"File no longer exists and not found in extracted: {file_path.name}")
+        
+        # Re-process files that were found in extracted directory
+        if reprocess_needed:
+            logger.info(f"Re-processing {len(reprocess_needed)} files from extracted directory...")
+            processed_files = []
+            
+            for extracted_file, file_name, album_name in reprocess_needed:
+                try:
+                    # Find corresponding JSON file
+                    json_file = None
+                    json_candidates = [
+                        extracted_file.with_suffix('.json'),
+                        extracted_file.parent / (extracted_file.stem + '.json'),
+                    ]
+                    for candidate in json_candidates:
+                        if candidate.exists():
+                            json_file = candidate
+                            break
+                    
+                    # Process the file (merge metadata)
+                    processed_file = processed_dir / file_name
+                    if json_file and json_file.exists():
+                        # Copy file to processed directory first
+                        import shutil
+                        processed_file.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(extracted_file, processed_file)
+                        
+                        # Merge metadata
+                        self.metadata_merger.merge_metadata(processed_file, json_file)
+                        logger.debug(f"Re-processed {file_name}")
+                    else:
+                        # No JSON, just copy the file
+                        import shutil
+                        processed_file.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(extracted_file, processed_file)
+                        logger.debug(f"Copied {file_name} (no JSON metadata)")
+                    
+                    if processed_file.exists():
+                        processed_files.append((processed_file, album_name))
+                except Exception as e:
+                    logger.error(f"Error re-processing {file_name}: {e}")
+            
+            # Add re-processed files to upload queue
+            for processed_file, album_name in processed_files:
+                if album_name not in files_by_album:
+                    files_by_album[album_name] = []
+                files_by_album[album_name].append(processed_file)
+            
+            logger.info(f"✓ Re-processed {len(processed_files)} files, ready for upload")
+        
+        # If redownload_zips is True and we have missing files, identify which zips need re-downloading
+        if redownload_zips and missing_files:
+            logger.info("")
+            logger.info("=" * 60)
+            logger.info("Re-downloading zip files containing failed uploads")
+            logger.info("=" * 60)
+            
+            # Identify which zips contain the failed files
+            # We need to map file names to zip files - this is approximate since we don't track this
+            # But we can re-download all zips that are in "converted" state (they have failed uploads)
+            zips_to_redownload = []
+            for zip_name, zip_data in self.state_manager._zip_state.items():
+                zip_state = zip_data.get('state')
+                if zip_state == 'converted':  # Converted but may have failed uploads
+                    zips_to_redownload.append(zip_name)
+            
+            if zips_to_redownload:
+                logger.info(f"Found {len(zips_to_redownload)} zip files to re-download and re-process")
+                logger.info("This will re-extract and re-process files, then retry uploads")
+                logger.info("")
+                
+                # Re-download and re-process these zips
+                drive_config = self.config['google_drive']
+                zip_dir = self.base_dir / self.config['processing']['zip_dir']
+                
+                # List zip files from Drive
+                zip_file_list = self.downloader.list_zip_files(
+                    folder_id=drive_config.get('folder_id') or None,
+                    pattern=drive_config.get('zip_file_pattern') or None
+                )
+                
+                # Create mapping from zip name to file_info
+                zip_info_by_name = {info['name']: info for info in zip_file_list}
+                
+                for zip_name in zips_to_redownload:
+                    if zip_name in zip_info_by_name:
+                        zip_info = zip_info_by_name[zip_name]
+                        zip_path = zip_dir / zip_name
+                        
+                        logger.info(f"Re-downloading {zip_name}...")
+                        try:
+                            # Convert size to int if available (Google Drive API returns it as string)
+                            file_size = None
+                            if 'size' in zip_info:
+                                try:
+                                    file_size = int(zip_info['size'])
+                                except (ValueError, TypeError):
+                                    pass
+                            
+                            # Download the zip
+                            downloaded_path = self.downloader.download_file(
+                                zip_info['id'],
+                                zip_name,
+                                zip_dir,
+                                file_size=file_size
+                            )
+                            
+                            if downloaded_path.exists():
+                                logger.info(f"✓ Downloaded {zip_name}")
+                                
+                                # Re-process the zip (extract, convert, upload)
+                                zip_number = zips_to_redownload.index(zip_name) + 1
+                                total_zips = len(zips_to_redownload)
+                                
+                                # Reset zip state so it gets fully re-processed
+                                self.state_manager.set_zip_state(zip_name, ZipProcessingState.PENDING, {})
+                                
+                                # Process the zip
+                                if self.process_single_zip(downloaded_path, zip_number, total_zips, use_sync_method, zip_info):
+                                    logger.info(f"✓ Successfully re-processed {zip_name}")
+                                else:
+                                    logger.warning(f"⚠️  Re-processing failed for {zip_name}")
+                            else:
+                                logger.error(f"❌ Download failed for {zip_name}")
+                        except Exception as e:
+                            logger.error(f"❌ Error re-downloading {zip_name}: {e}")
+                    else:
+                        logger.warning(f"⚠️  Zip file {zip_name} not found in Google Drive listing")
+                
+                # After re-downloading, re-run retry to pick up newly processed files
+                logger.info("")
+                logger.info("Re-running retry after re-download...")
+                return self.retry_failed_uploads(use_sync_method=use_sync_method, redownload_zips=False)
+        
+        if not files_by_album:
+            logger.warning("No files available to retry (all files are missing and not found in extracted directory)")
+            logger.warning(f"  Missing files: {len(missing_files)}")
+            logger.warning(f"  Found in extracted: {len(reprocess_needed)}")
+            if not redownload_zips:
+                logger.warning("")
+                logger.warning("💡 Tip: Run with --redownload-zips to re-download and re-process zip files")
+                logger.warning("   containing failed uploads")
+            return {}
         
         # Upload files
         results = {}
@@ -688,11 +909,18 @@ class MigrationOrchestrator:
                 results.update(album_results)
         
         # Update failed uploads file (remove successful ones)
+        # Match successful files by both original path and processed path
         successful_files = {str(path) for path, success in results.items() if success}
-        remaining_failed = {
-            k: v for k, v in failed_data.items() 
-            if k not in successful_files
-        }
+        successful_file_names = {Path(path).name for path, success in results.items() if success}
+        
+        remaining_failed = {}
+        for k, v in failed_data.items():
+            file_path_str = v.get('file', '')
+            file_name = Path(file_path_str).name
+            
+            # Check if this file was successfully uploaded (by path or by name)
+            if file_path_str not in successful_files and file_name not in successful_file_names:
+                remaining_failed[k] = v
         
         # Increment retry count for still-failed files
         for file_path_str in remaining_failed:
@@ -1435,7 +1663,9 @@ class MigrationOrchestrator:
         if retry_failed:
             self.statistics.start()
             self.setup_icloud_uploader(use_sync_method=use_sync_method)
-            self.retry_failed_uploads(use_sync_method=use_sync_method)
+            # Check if we should also re-download zips
+            redownload_zips = getattr(self, '_redownload_zips', False)
+            self.retry_failed_uploads(use_sync_method=use_sync_method, redownload_zips=redownload_zips)
             self._generate_final_report(0, 0)
             return
         
@@ -1952,6 +2182,11 @@ def main():
         help='Retry previously failed uploads (skips download/extract/process steps)'
     )
     parser.add_argument(
+        '--redownload-zips',
+        action='store_true',
+        help='When used with --retry-failed, also re-download and re-process zip files containing failed uploads'
+    )
+    parser.add_argument(
         '--max-disk-space',
         type=float,
         default=None,
@@ -1971,6 +2206,10 @@ def main():
         else:
             orchestrator.config['processing']['max_disk_space_gb'] = args.max_disk_space
             logger.info(f"Disk space limit: {args.max_disk_space} GB (set via --max-disk-space)")
+    
+    # Store redownload_zips flag in orchestrator for retry mode
+    if args.retry_failed and args.redownload_zips:
+        orchestrator._redownload_zips = True
     
     orchestrator.run(use_sync_method=args.use_sync, retry_failed=args.retry_failed)
 
