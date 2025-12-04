@@ -9,7 +9,6 @@ A macOS tool to migrate photos and videos from Google Photos (exported via Googl
 - Merges JSON metadata into media files using ExifTool
 - Preserves album structures from Google Takeout
 - Uploads to iCloud Photos using PhotoKit (macOS native integration)
-- **Modern Web UI** with real-time progress tracking (NEW!)
 
 ## Prerequisites
 
@@ -84,33 +83,16 @@ Environment variables take precedence over `config.yaml` values. See [AUTHENTICA
 
 ## Usage
 
-### Web UI (Recommended)
-
-Start the modern web interface for an intuitive, visual migration experience:
-
-```bash
-python3 web_server.py
-```
-
-Then open your browser to `http://localhost:5001`
-
-> **Note:** The web UI provides real-time progress tracking, live statistics, and activity logs - perfect for monitoring long-running migrations.
-
-See [WEB_UI.md](WEB_UI.md) for detailed web UI documentation.
-
 ### Command Line Usage
 
 ```bash
 python main.py --config config.yaml
 ```
 
-### Using Photos Library Sync Method (Recommended - Default in Web UI)
+### Using Photos Library Sync Method (Recommended)
 
-For the most reliable uploads with full EXIF metadata preservation, use the PhotoKit-based sync method (macOS only). **This is now the default in the Web UI.**
+For the most reliable uploads with full EXIF metadata preservation, use the PhotoKit-based sync method (macOS only):
 
-**Web UI**: PhotoKit sync is enabled by default - just start the migration.
-
-**Command Line**:
 ```bash
 python main.py --config config.yaml --use-sync
 ```
@@ -260,7 +242,6 @@ For issues or questions:
 ## Documentation
 
 - **[QUICKSTART.md](QUICKSTART.md)** - Get started in 5 minutes (for users with prerequisites installed)
-- **[WEB_UI.md](WEB_UI.md)** - Modern web interface guide with real-time progress tracking
 - **[COMPLETE_INSTALLATION_GUIDE.md](COMPLETE_INSTALLATION_GUIDE.md)** - Step-by-step setup on a new MacBook
 - **[AUTHENTICATION_GUIDE.md](AUTHENTICATION_GUIDE.md)** - Detailed authentication setup guide
 - **[TESTING.md](TESTING.md)** - Test the migration before running the full process

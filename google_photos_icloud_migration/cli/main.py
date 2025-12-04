@@ -545,28 +545,14 @@ class MigrationOrchestrator:
         Returns:
             True if user wants to proceed, False if they want to stop
         """
-        # Check if we're in a non-interactive environment (web UI)
+        # Check if we're in a non-interactive environment
         import sys
         is_interactive = sys.stdin.isatty()
         
         if not is_interactive:
-            # In non-interactive mode (web UI), wait for proceed signal
-            logger.info("Waiting for proceed signal from web UI...")
-            # Check the proceed flag (set externally by web UI)
-            max_wait = 3600  # Wait up to 1 hour
-            waited = 0
-            while not self._proceed_after_retries and waited < max_wait:
-                time.sleep(1)
-                waited += 1
-                # Check stop flag if available (set by web UI)
-                if hasattr(self, '_stop_requested') and self._stop_requested:
-                    return False
-            
-            if waited >= max_wait:
-                logger.warning("Timeout waiting for proceed signal. Proceeding automatically.")
-                return True
-            
-            self._proceed_after_retries = False  # Reset for next time
+            # In non-interactive mode, proceed automatically after a short delay
+            logger.info("Non-interactive mode detected. Proceeding automatically...")
+            return True
             return True
         
         # Interactive mode - ask user
@@ -1792,82 +1778,17 @@ class MigrationOrchestrator:
                             return self.run(use_sync_method=use_sync_method, retry_failed=False)
                         
                 except CorruptedZipException as e:
-                    # Corrupted zip detected - stop and emit event for web UI
+                    # Corrupted zip detected
                     logger.error(f"❌ Corrupted zip file detected: {e.zip_path}")
                     logger.error(f"   Error: {e}")
                     
                     # Save to corrupted zips file
                     self._save_corrupted_zip(e.file_info, Path(e.zip_path), str(e))
                     
-                    # Emit socket event for web UI (if available) and wait for redownload
-                    try:
-                        from web.app import socketio, migration_state
-                        socketio.emit('corrupted_zip_detected', {
-                            'zip_path': e.zip_path,
-                            'file_name': e.file_info.get('name', Path(e.zip_path).name),
-                            'file_id': e.file_info.get('id', 'unknown'),
-                            'file_size_mb': e.file_size_mb,
-                            'error_message': str(e)
-                        })
-                        # Set flag to wait for redownload
-                        migration_state['waiting_for_corrupted_zip_redownload'] = True
-                        migration_state['corrupted_zip_redownloaded'] = False
-                        migration_state['skip_corrupted_zip'] = False  # Reset skip flag
-                        
-                        # Wait for redownload (up to 1 hour), but check for skip flag
-                        max_wait = 3600
-                        waited = 0
-                        skipped = False
-                        while not migration_state.get('corrupted_zip_redownloaded', False) and waited < max_wait:
-                            # Check if user requested to skip this corrupted zip
-                            if migration_state.get('skip_corrupted_zip', False):
-                                logger.info(f"User requested to skip corrupted zip: {e.zip_path}")
-                                migration_state['skip_corrupted_zip'] = False
-                                migration_state['waiting_for_corrupted_zip_redownload'] = False
-                                skipped = True
-                                # In web UI mode, auto-skip continue prompts
-                                import sys
-                                if not sys.stdin.isatty():
-                                    self._skip_continue_prompts = True
-                                break
-                            
-                            time.sleep(1)
-                            waited += 1
-                            # Check stop flag
-                            if hasattr(self, '_stop_requested') and self._stop_requested:
-                                raise MigrationStoppedException("Migration stopped by user")
-                        
-                        # If we skipped or timed out, continue to next zip
-                        if skipped or (waited >= max_wait and not migration_state.get('corrupted_zip_redownloaded', False)):
-                            if waited >= max_wait and not skipped:
-                                logger.warning("Timeout waiting for corrupted zip redownload. Skipping file.")
-                            failed += 1
-                            # In web UI mode, auto-skip continue prompts
-                            import sys
-                            if not sys.stdin.isatty():
-                                self._skip_continue_prompts = True
-                            continue
-                        
-                        # Reset flags
-                        migration_state['waiting_for_corrupted_zip_redownload'] = False
-                        migration_state['corrupted_zip_redownloaded'] = False
-                        
-                        # Try processing again
-                        logger.info(f"Retrying processing of {e.zip_path} after redownload...")
-                        process_result = self.process_single_zip(Path(e.zip_path), processed_count, total_zips, use_sync_method, file_info=e.file_info)
-                        if process_result:
-                            successful += 1
-                        else:
-                            failed += 1
-                        # Skip continue prompt after retry in web UI mode
-                        import sys
-                        if not sys.stdin.isatty():
-                            self._skip_continue_prompts = True
-                        continue
-                        
-                    except (ImportError, AttributeError):
-                        # Not in web UI mode - re-raise to stop processing
-                        raise
+                    # Skip this zip and continue
+                    logger.warning(f"Skipping corrupted zip file: {e.zip_path}")
+                    failed += 1
+                    continue
                 except MigrationStoppedException as e:
                     logger.info("Migration stopped by user.")
                     logger.info(f"Reason: {e}")
@@ -1945,82 +1866,17 @@ class MigrationOrchestrator:
                             return self.run(use_sync_method=use_sync_method, retry_failed=False)
                         
                 except CorruptedZipException as e:
-                    # Corrupted zip detected - stop and emit event for web UI
+                    # Corrupted zip detected
                     logger.error(f"❌ Corrupted zip file detected: {e.zip_path}")
                     logger.error(f"   Error: {e}")
                     
                     # Save to corrupted zips file
                     self._save_corrupted_zip(e.file_info, Path(e.zip_path), str(e))
                     
-                    # Emit socket event for web UI (if available) and wait for redownload
-                    try:
-                        from web.app import socketio, migration_state
-                        socketio.emit('corrupted_zip_detected', {
-                            'zip_path': e.zip_path,
-                            'file_name': e.file_info.get('name', Path(e.zip_path).name),
-                            'file_id': e.file_info.get('id', 'unknown'),
-                            'file_size_mb': e.file_size_mb,
-                            'error_message': str(e)
-                        })
-                        # Set flag to wait for redownload
-                        migration_state['waiting_for_corrupted_zip_redownload'] = True
-                        migration_state['corrupted_zip_redownloaded'] = False
-                        migration_state['skip_corrupted_zip'] = False  # Reset skip flag
-                        
-                        # Wait for redownload (up to 1 hour), but check for skip flag
-                        max_wait = 3600
-                        waited = 0
-                        skipped = False
-                        while not migration_state.get('corrupted_zip_redownloaded', False) and waited < max_wait:
-                            # Check if user requested to skip this corrupted zip
-                            if migration_state.get('skip_corrupted_zip', False):
-                                logger.info(f"User requested to skip corrupted zip: {e.zip_path}")
-                                migration_state['skip_corrupted_zip'] = False
-                                migration_state['waiting_for_corrupted_zip_redownload'] = False
-                                skipped = True
-                                # In web UI mode, auto-skip continue prompts
-                                import sys
-                                if not sys.stdin.isatty():
-                                    self._skip_continue_prompts = True
-                                break
-                            
-                            time.sleep(1)
-                            waited += 1
-                            # Check stop flag
-                            if hasattr(self, '_stop_requested') and self._stop_requested:
-                                raise MigrationStoppedException("Migration stopped by user")
-                        
-                        # If we skipped or timed out, continue to next zip
-                        if skipped or (waited >= max_wait and not migration_state.get('corrupted_zip_redownloaded', False)):
-                            if waited >= max_wait and not skipped:
-                                logger.warning("Timeout waiting for corrupted zip redownload. Skipping file.")
-                            failed += 1
-                            # In web UI mode, auto-skip continue prompts
-                            import sys
-                            if not sys.stdin.isatty():
-                                self._skip_continue_prompts = True
-                            continue
-                        
-                        # Reset flags
-                        migration_state['waiting_for_corrupted_zip_redownload'] = False
-                        migration_state['corrupted_zip_redownloaded'] = False
-                        
-                        # Try processing again
-                        logger.info(f"Retrying processing of {e.zip_path} after redownload...")
-                        process_result = self.process_single_zip(Path(e.zip_path), processed_count, total_zips, use_sync_method, file_info=e.file_info)
-                        if process_result:
-                            successful += 1
-                        else:
-                            failed += 1
-                        # Skip continue prompt after retry in web UI mode
-                        import sys
-                        if not sys.stdin.isatty():
-                            self._skip_continue_prompts = True
-                        continue
-                        
-                    except (ImportError, AttributeError):
-                        # Not in web UI mode - re-raise to stop processing
-                        raise
+                    # Skip this zip and continue
+                    logger.warning(f"Skipping corrupted zip file: {e.zip_path}")
+                    failed += 1
+                    continue
                 except MigrationStoppedException as e:
                     logger.info("Migration stopped by user.")
                     logger.info(f"Reason: {e}")
@@ -2036,12 +1892,6 @@ class MigrationOrchestrator:
             # If there are failed uploads, pause and ask user to retry
             if failed_uploads_exist:
                 self._paused_for_retries = True
-                # Set paused state in web UI if available
-                try:
-                    from web.app import migration_state
-                    migration_state['paused_for_retries'] = True
-                except ImportError:
-                    pass  # Not in web UI mode
                 
                 logger.info("")
                 logger.warning("=" * 60)
@@ -2050,14 +1900,13 @@ class MigrationOrchestrator:
                 logger.warning("Some files failed to upload. The downloaded zip files have been kept")
                 logger.warning("so you can retry the failed uploads.")
                 logger.warning("")
-                logger.warning("Please retry the failed uploads using the web UI or CLI:")
-                logger.warning("  - Web UI: Use the 'Retry' buttons in the Failed Uploads section")
-                logger.warning("  - CLI: python main.py --config <config> --retry-failed")
+                logger.warning("Please retry the failed uploads using the CLI:")
+                logger.warning("  python main.py --config <config> --retry-failed")
                 logger.warning("")
                 logger.warning("After retrying, you can proceed with cleanup.")
                 logger.warning("=" * 60)
                 
-                # Wait for user to proceed (for web UI, this will be handled via API)
+                # Wait for user to proceed
                 proceed = self._ask_proceed_after_retries()
                 if not proceed:
                     logger.info("Migration paused. Please retry failed uploads and then proceed.")

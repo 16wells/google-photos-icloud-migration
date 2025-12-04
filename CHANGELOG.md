@@ -8,15 +8,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **Modern Web UI** with Flask backend and Tailwind CSS frontend
-  - Real-time progress tracking via WebSocket connections
-  - Live statistics dashboard with migration metrics
-  - Activity log streaming with user-controlled log levels (DEBUG, INFO, WARNING, ERROR)
-  - Configuration management through web interface
-  - Failed uploads viewer with individual and bulk retry functionality
-  - Pause before cleanup when failed uploads are detected (preserves zip files for retry)
-  - "Proceed with Cleanup" button to continue after retries
-  - Responsive design for desktop and mobile
 - Developer tooling infrastructure (Makefile, pre-commit hooks, flake8 config)
 - Comprehensive test suite with pytest
 - Code formatting and type hints (black, isort, mypy)
@@ -44,7 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Type hints added throughout codebase
 - Error messages made more actionable
 - Configuration management improved
-- **PhotoKit sync method is now default in Web UI** (recommended method)
+- **PhotoKit sync method is now the recommended method**
 - Activity log now includes full context (timestamp, logger name, level, message)
 - Migration automatically pauses before cleanup if failed uploads exist
 - Zip files are preserved when uploads fail to allow retries

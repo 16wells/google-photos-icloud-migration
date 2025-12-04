@@ -534,22 +534,7 @@ Before running, you'll need to grant permission to access your Photos library:
 
 ### 10.4 Run the Migration
 
-You have two options for running the migration:
-
-**Option A: Web UI (Recommended - Visual interface with real-time progress)**
-
-```bash
-python3 web_server.py
-```
-
-Then open `http://localhost:5001` in your web browser. The web UI provides:
-- Real-time progress tracking
-- Live statistics and activity logs
-- Easy-to-use interface
-
-See [WEB_UI.md](WEB_UI.md) for detailed web UI documentation.
-
-**Option B: Command Line**
+Run the migration using the command line:
 
 For the recommended PhotoKit method (preserves metadata, supports albums):
 
@@ -721,7 +706,7 @@ If albums aren't being created:
 ### Need More Help?
 
 1. Check the main [README.md](README.md) for more details
-2. See [WEB_UI.md](WEB_UI.md) for web interface documentation
+2. See [README.md](README.md) for detailed documentation
 3. Review logs in `migration.log` file
 4. Check the [Troubleshooting section](README.md#troubleshooting) in README
 
@@ -745,11 +730,7 @@ After your first successful migration:
 # Activate virtual environment (do this every time you open Terminal)
 source venv/bin/activate
 
-# Run migration with Web UI (recommended - visual interface)
-python3 web_server.py
-# Then open http://localhost:5001 in your browser
-
-# Run migration with Command Line (PhotoKit method)
+# Run migration with Command Line (PhotoKit method - recommended)
 python3 main.py --config config.yaml --use-sync
 
 # Retry failed uploads
