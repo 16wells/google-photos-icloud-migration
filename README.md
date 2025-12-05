@@ -2,6 +2,18 @@
 
 A macOS tool to migrate photos and videos from Google Photos (exported via Google Takeout) to iCloud Photos, preserving metadata and album structures.
 
+## Why this tool?
+
+I have a legacy free Google Workspace account for my family's use.  These accounts are limited to a pretty tight amount of storage to share across what (for us) is a couple dozen users. One of the family ended up with close to 400 gb of photos, and Google started sending warnings / nastygrams about shutting the account off unless the space got cleared up.
+
+The transfer direct from Google Photos to iCloud Photos that was talked about on the web when I was doing this was not available in these old free Google Workspace accounts, so I had to come up with something.
+
+It was such a huge task that I decided to throw it at Cursor AI and Claude to build me a tool that would do the transfer from Google Photos to Apple iCloud Photos for my family member. Along the way I realized that Apple doesn't have a public API for Photos, so you have to do this transfer on a Mac that can log into that iCloud account.  This allows it to use PhotoKit locally on the machine to do the transfer.
+
+Disk space is managed as well as it can be - I did this on a MacBook Air with 512GB hard drive.  But it really takes a long time doing it this way.  What sped it up to an acceptable experience was attaching a 2 TB SSD hard drive and moving the default Photos library to that drive.  Then it had enough room to move through things pretty quickly.
+
+It *does* run in the terminal only. Apologies if that's not your jam. But in the build, I had initially built a web-based tool and it was unreliable as hell because of the extended time to download the zip files timing out the webserver.  The terminal might not be everything you'd want, but it's stable and the sucker just keeps running.
+
 ## Features
 
 - Downloads Google Takeout zip files from Google Drive
