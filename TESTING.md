@@ -46,9 +46,9 @@ If you already have a zip file locally, you can test the extraction and processi
 1. Create a test script `test_local.py`:
 ```python
 from pathlib import Path
-from extractor import Extractor
-from metadata_merger import MetadataMerger
-from album_parser import AlbumParser
+from google_photos_icloud_migration.processor.extractor import Extractor
+from google_photos_icloud_migration.processor.metadata_merger import MetadataMerger
+from google_photos_icloud_migration.parser.album_parser import AlbumParser
 
 # Test extraction
 extractor = Extractor(Path("/tmp/test-migration"))
@@ -104,7 +104,7 @@ Before uploading everything, test with a small batch:
 1. Create a test upload script `test_upload.py`:
 ```python
 from pathlib import Path
-from icloud_uploader import iCloudUploader, iCloudPhotosSyncUploader
+from google_photos_icloud_migration.uploader.icloud_uploader import iCloudUploader, iCloudPhotosSyncUploader
 import yaml
 
 # Load config
@@ -224,7 +224,7 @@ To test performance with different batch sizes:
 ```python
 import time
 from pathlib import Path
-from metadata_merger import MetadataMerger
+from google_photos_icloud_migration.processor.metadata_merger import MetadataMerger
 
 merger = MetadataMerger()
 

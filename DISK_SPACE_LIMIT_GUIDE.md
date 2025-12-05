@@ -11,32 +11,7 @@ The migration tool now includes a **Disk Space Limit** feature that allows you t
 
 ## How It Works
 
-### The Slider Interface
-
-Located in the Configuration section's "Processing" settings:
-
-```
-┌─────────────────────────────────────────────────┐
-│ Maximum Disk Space Usage: Unlimited             │
-├─────────────────────────────────────────────────┤
-│ [====●──────────────────────────────────────]   │
-│ Unlimited    50 GB    100 GB   200 GB   500 GB  │
-└─────────────────────────────────────────────────┘
-```
-
-### Slider Values
-
-- **Position**: Far left (0)
-  - **Display**: "Unlimited" (green)
-  - **Behavior**: No limit, uses all available disk space
-
-- **Position**: 10-49 GB
-  - **Display**: "10 GB" to "49 GB" (orange - warning)
-  - **Behavior**: May be tight for large libraries
-
-- **Position**: 50+ GB
-  - **Display**: "50 GB" to "500 GB" (blue - recommended)
-  - **Behavior**: Good for most migrations
+The disk space limit feature monitors the amount of disk space used by the migration process and pauses downloads when the limit is reached. This helps prevent filling up your disk during large migrations.
 
 ### What Happens When Limit is Reached
 
@@ -51,19 +26,11 @@ Located in the Configuration section's "Processing" settings:
    - Process continues until all files are migrated
 
 3. **User Notification**:
-   - Progress shows "Waiting for disk space"
-   - Disk space monitor shows current usage
+   - Terminal logs show "Waiting for disk space"
    - Logs indicate when pausing/resuming
+   - Progress messages show current disk usage
 
 ## Configuration
-
-### Via Web UI (Recommended)
-
-1. Open `http://localhost:5001`
-2. Click "▼ Edit Config"
-3. Find "Maximum Disk Space Usage" slider
-4. Drag to desired limit (or leave at "Unlimited")
-5. Click "Save Configuration"
 
 ### Via config.yaml
 
@@ -90,9 +57,9 @@ processing:
 ### Best Practices
 
 1. **Leave Headroom**: Set limit to 2-3x your largest ZIP file
-2. **Enable Cleanup**: Turn on "Cleanup after processing" to free space automatically
-3. **Monitor**: Watch the disk space indicator during migration
-4. **Adjust**: You can change the limit mid-migration (stop, change, restart)
+2. **Enable Cleanup**: Turn on `cleanup_after_upload` to free space automatically
+3. **Monitor**: Watch terminal logs for disk space messages
+4. **Adjust**: You can change the limit mid-migration (stop, change config, restart)
 
 ## Examples
 
@@ -199,27 +166,6 @@ The tool monitors:
 
 ## Monitoring
 
-### Web UI Indicators
-
-1. **Disk Space Card** (sidebar):
-   ```
-   💾 Disk Space
-   ✓ 45.2 GB Free
-   Total: 500 GB
-   Used: 454.8 GB (91.0%)
-   Free: 45.2 GB (9.0%)
-   Path: /Users/.../google-photos-migration
-   ```
-
-2. **Progress Messages**:
-   - "Downloading ZIP files..."
-   - "Waiting for disk space... (45/100 GB used)"
-   - "Cleanup freed 15 GB, resuming downloads"
-
-3. **Statistics**:
-   - Shows files awaiting download
-   - Updates when space becomes available
-
 ### Terminal Logs
 
 ```
@@ -244,7 +190,7 @@ INFO: Resuming downloads...
 **A**: No, only to files in the migration directory. Uploaded files go to iCloud.
 
 ### Q: How do I see current disk usage?
-**A**: Check the "Disk Space" card in the web UI sidebar, or use `df -h` in terminal.
+**A**: Use `df -h` in terminal to see disk usage, or check the migration directory size with `du -sh <base_dir>`.
 
 ### Q: Should I use unlimited or set a limit?
 **A**: 
