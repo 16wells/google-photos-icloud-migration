@@ -121,6 +121,21 @@ class MigrationOrchestrator:
         for key, default_value in processing_defaults.items():
             if key not in config['processing']:
                 config['processing'][key] = default_value
+
+        # Ensure metadata section exists with defaults
+        if 'metadata' not in config:
+            config['metadata'] = {}
+            
+        metadata_defaults = {
+            'preserve_dates': True,
+            'preserve_gps': True,
+            'preserve_descriptions': True,
+            'preserve_albums': True
+        }
+        
+        for key, default_value in metadata_defaults.items():
+            if key not in config['metadata']:
+                config['metadata'][key] = default_value
         
         return config
     

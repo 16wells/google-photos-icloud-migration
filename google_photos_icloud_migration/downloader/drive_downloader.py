@@ -176,21 +176,6 @@ class DriveDownloader:
                     )
                     time.sleep(wait_time)
                     continue
-                elif e.resp.status == 500 and folder_id:
-                    # If folder_id query fails, try without folder_id
-                    logger.warning("Query with folder_id failed. Trying without folder filter...")
-                    query = "mimeType='application/zip' or mimeType='application/x-zip-compressed'"
-                    try:
-                        results = self.service.files().list(
-                            q=query,
-                            fields="files(id, name, size, modifiedTime)",
-                            pageSize=1000
-                        ).execute()
-                        break
-                    except HttpError as e2:
-                        raise DownloadError(
-                            f"Failed to list files from Google Drive: HTTP {e2.resp.status} - {e2}"
-                        ) from e2
                 elif e.resp.status == 401:
                     raise AuthenticationError(
                         "Google Drive API authentication failed. "
