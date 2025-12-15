@@ -51,22 +51,52 @@ console = Console()
 class GooglePhotosDeleter:
     """Handles deletion of photos and videos from Google Photos."""
     
-    def __init__(self, headless: bool = False, dry_run: bool = True):
+    def __init__(self, headless: bool = False, dry_run: bool = True, browser: str = "chrome"):
         """
         Initialize the Google Photos deleter.
         
         Args:
-            headless: Run browser in headless mode (no visible window)
+            headless: Run browser in headless mode (no visible window) - Chrome only
             dry_run: If True, only plan what would be deleted without actually deleting
+            browser: Browser to use ("chrome" or "safari")
         """
         self.headless = headless
         self.dry_run = dry_run
+        self.browser = browser.lower()
         self.driver: Optional[webdriver.Chrome] = None
         self.deleted_count = 0
         self.failed_count = 0
         self.start_time = None
         
+        # Safari doesn't support headless mode
+        if self.browser == "safari" and self.headless:
+            logger.warning("Safari doesn't support headless mode. Running in visible mode.")
+            self.headless = False
+        
     def _setup_driver(self):
+        """Set up WebDriver with appropriate options for the selected browser."""
+        if self.browser == "safari":
+            self._setup_safari_driver()
+        else:
+            self._setup_chrome_driver()
+    
+    def _setup_safari_driver(self):
+        """Set up Safari WebDriver."""
+        try:
+            self.driver = webdriver.Safari()
+            logger.info("Safari WebDriver initialized successfully")
+            # Set window size for better element visibility
+            self.driver.set_window_size(1920, 1080)
+        except Exception as e:
+            logger.error(f"Failed to initialize Safari driver: {e}")
+            logger.error("\nSafari WebDriver setup required:")
+            logger.error("1. Enable Develop menu: Safari > Preferences > Advanced > Show Develop menu")
+            logger.error("2. Enable Remote Automation: Develop > Allow Remote Automation")
+            logger.error("3. Authorize safaridriver: /usr/bin/safaridriver --enable")
+            logger.error("   (You may need to enter your password)")
+            raise
+    
+    def _setup_chrome_driver(self):
         """Set up Chrome WebDriver with appropriate options."""
         chrome_options = Options()
         
@@ -80,19 +110,43 @@ class GooglePhotosDeleter:
         chrome_options.add_experimental_option('useAutomationExtension', False)
         chrome_options.add_argument('--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
         
-        # Try to find ChromeDriver
+        # Try to use webdriver-manager first (automatic ChromeDriver management)
         try:
-            self.driver = webdriver.Chrome(options=chrome_options)
+            from webdriver_manager.chrome import ChromeDriverManager
+            from selenium.webdriver.chrome.service import Service
+            
+            service = Service(ChromeDriverManager().install())
+            self.driver = webdriver.Chrome(service=service, options=chrome_options)
+            logger.info("ChromeDriver automatically downloaded and configured via webdriver-manager")
+        except ImportError:
+            # Fallback to system ChromeDriver if webdriver-manager not available
+            logger.info("webdriver-manager not available, using system ChromeDriver")
+            try:
+                self.driver = webdriver.Chrome(options=chrome_options)
+            except Exception as e:
+                logger.error(f"Failed to initialize Chrome driver: {e}")
+                logger.error("Please install dependencies:")
+                logger.error("  pip install webdriver-manager")
+                logger.error("Or manually install ChromeDriver from:")
+                logger.error("  https://googlechromelabs.github.io/chrome-for-testing/")
+                logger.error("  (Note: Homebrew chromedriver is deprecated)")
+                raise
         except Exception as e:
-            logger.error(f"Failed to initialize Chrome driver: {e}")
-            logger.error("Please install ChromeDriver:")
-            logger.error("  macOS: brew install chromedriver")
-            logger.error("  Or download from: https://chromedriver.chromium.org/")
-            raise
+            # If webdriver-manager fails, try system ChromeDriver
+            logger.warning(f"webdriver-manager failed: {e}, trying system ChromeDriver")
+            try:
+                self.driver = webdriver.Chrome(options=chrome_options)
+            except Exception as e2:
+                logger.error(f"Failed to initialize Chrome driver: {e2}")
+                logger.error("Please install dependencies:")
+                logger.error("  pip install webdriver-manager")
+                logger.error("Or manually install ChromeDriver from:")
+                logger.error("  https://googlechromelabs.github.io/chrome-for-testing/")
+                raise
         
         # Set window size for better element visibility
         self.driver.set_window_size(1920, 1080)
-        logger.info("Chrome driver initialized successfully")
+        
     
     def _wait_for_element(self, by: By, value: str, timeout: int = 10):
         """Wait for an element to be present and visible."""
@@ -498,7 +552,10 @@ Examples:
   # Actually delete (after reviewing plan):
   python delete_google_photos.py --execute
   
-  # Headless mode (no browser window):
+  # Use Safari instead of Chrome:
+  python delete_google_photos.py --execute --browser safari
+  
+  # Headless mode (Chrome only, no browser window):
   python delete_google_photos.py --execute --headless
         """
     )
@@ -519,7 +576,7 @@ Examples:
     parser.add_argument(
         '--headless',
         action='store_true',
-        help='Run browser in headless mode (no visible window)'
+        help='Run browser in headless mode (no visible window) - Chrome only, Safari doesn\'t support headless'
     )
     
     parser.add_argument(
@@ -534,6 +591,14 @@ Examples:
         type=float,
         default=2.0,
         help='Delay between operations in seconds (default: 2.0)'
+    )
+    
+    parser.add_argument(
+        '--browser',
+        type=str,
+        choices=['chrome', 'safari'],
+        default='chrome',
+        help='Browser to use: chrome or safari (default: chrome)'
     )
     
     args = parser.parse_args()
@@ -559,7 +624,7 @@ Examples:
             return
     
     # Create deleter
-    deleter = GooglePhotosDeleter(headless=args.headless, dry_run=dry_run)
+    deleter = GooglePhotosDeleter(headless=args.headless, dry_run=dry_run, browser=args.browser)
     
     try:
         # Setup driver

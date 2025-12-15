@@ -9,7 +9,7 @@ This script allows you to delete all photos and videos from your Google Photos a
 ## Prerequisites
 
 1. **Complete backup**: Ensure you've downloaded everything via Google Takeout
-2. **Chrome browser**: The script uses Chrome/ChromeDriver
+2. **Browser**: Chrome or Safari (Safari is built-in on macOS, no additional installation needed)
 3. **Python dependencies**: Install required packages
 
 ## Installation
@@ -26,18 +26,34 @@ This script allows you to delete all photos and videos from your Google Photos a
    # venv\Scripts\activate
    ```
 
-2. Install ChromeDriver:
-   ```bash
-   # macOS
-   brew install chromedriver
-   
-   # Or download from: https://chromedriver.chromium.org/
-   ```
-
-3. Install Python dependencies:
+2. Install Python dependencies:
    ```bash
    pip install -r requirements.txt
    ```
+
+3. **Choose your browser:**
+
+   **Option A: Safari (Recommended for macOS)**
+   - No additional installation needed - Safari is built-in!
+   - Enable Safari WebDriver:
+     ```bash
+     # 1. Enable Develop menu in Safari:
+     #    Safari > Preferences > Advanced > Show Develop menu
+     
+     # 2. Enable Remote Automation:
+     #    Develop > Allow Remote Automation
+     
+     # 3. Authorize safaridriver (run in terminal):
+     /usr/bin/safaridriver --enable
+     ```
+   - That's it! Safari is ready to use.
+
+   **Option B: Chrome**
+   - The script uses `webdriver-manager` which automatically downloads and manages ChromeDriver. No manual installation needed!
+   - **Alternative:** If you prefer manual installation:
+     - Download ChromeDriver from: https://googlechromelabs.github.io/chrome-for-testing/
+     - Extract and place `chromedriver` in your PATH
+     - ⚠️ **Note:** Homebrew's `chromedriver` is deprecated and will be disabled on 2026-09-01
 
 ## Usage
 
@@ -98,7 +114,10 @@ python delete_google_photos.py --dry-run
 # Actually delete (requires confirmations)
 python delete_google_photos.py --execute
 
-# Run in headless mode (no visible browser)
+# Use Safari instead of Chrome (macOS)
+python delete_google_photos.py --execute --browser safari
+
+# Run in headless mode (Chrome only, no visible browser)
 python delete_google_photos.py --execute --headless
 
 # Customize batch size and delay
@@ -109,7 +128,8 @@ python delete_google_photos.py --execute --batch-size 100 --delay 3.0
 
 - `--dry-run`: Plan mode - shows what would be deleted (default)
 - `--execute`: Actually delete photos (overrides --dry-run)
-- `--headless`: Run browser in headless mode (no visible window)
+- `--browser {chrome,safari}`: Browser to use (default: chrome)
+- `--headless`: Run browser in headless mode (Chrome only, Safari doesn't support headless)
 - `--batch-size N`: Number of items to delete per batch (default: 50)
 - `--delay N`: Delay between operations in seconds (default: 2.0)
 
@@ -132,21 +152,51 @@ python delete_google_photos.py --execute --batch-size 100 --delay 3.0
 
 ## Troubleshooting
 
-### ChromeDriver Not Found
+### Browser Setup Issues
 
-```bash
-# macOS
-brew install chromedriver
+**Safari WebDriver Issues:**
 
-# Or download manually from:
-# https://chromedriver.chromium.org/
-```
+If Safari fails to initialize:
+
+1. **Enable Develop menu:**
+   - Safari > Preferences > Advanced
+   - Check "Show Develop menu in menu bar"
+
+2. **Enable Remote Automation:**
+   - Develop > Allow Remote Automation
+
+3. **Authorize safaridriver:**
+   ```bash
+   /usr/bin/safaridriver --enable
+   ```
+   You may be prompted for your password.
+
+**ChromeDriver Not Found:**
+
+The script uses `webdriver-manager` which should automatically download ChromeDriver. If you encounter issues:
+
+1. **Make sure webdriver-manager is installed:**
+   ```bash
+   pip install webdriver-manager
+   ```
+
+2. **Manual installation (if needed):**
+   - Download from: https://googlechromelabs.github.io/chrome-for-testing/
+   - Extract and place `chromedriver` in your PATH
+   - ⚠️ **Note:** Homebrew's `chromedriver` is deprecated and will be disabled on 2026-09-01
 
 ### Browser Doesn't Open
 
+**For Chrome:**
 - Make sure Chrome is installed
 - Try running without `--headless` to see what's happening
 - Check that ChromeDriver version matches your Chrome version
+
+**For Safari:**
+- Make sure Safari is installed (comes with macOS)
+- Verify Remote Automation is enabled: Develop > Allow Remote Automation
+- Run `/usr/bin/safaridriver --enable` if you haven't already
+- Safari doesn't support headless mode - the browser window will always be visible
 
 ### Photos Not Being Selected
 
@@ -184,11 +234,18 @@ source venv/bin/activate
 
 # 2. Install dependencies
 pip install -r requirements.txt
-brew install chromedriver  # macOS
 
-# 3. Run dry-run first (safe, no deletion)
+# 3. (Optional) Setup Safari (if using Safari instead of Chrome):
+#    - Safari > Preferences > Advanced > Show Develop menu
+#    - Develop > Allow Remote Automation
+#    - Run: /usr/bin/safaridriver --enable
+
+# 4. Run dry-run first (safe, no deletion)
 python delete_google_photos.py --dry-run
 
-# 4. If satisfied, execute deletion
+# 5. If satisfied, execute deletion
 python delete_google_photos.py --execute
+
+# Or use Safari:
+python delete_google_photos.py --execute --browser safari
 ```
