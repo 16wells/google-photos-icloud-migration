@@ -92,8 +92,11 @@ class GooglePhotosDeleter:
             logger.error("\nSafari WebDriver setup required:")
             logger.error("1. Enable Develop menu: Safari > Preferences > Advanced > Show Develop menu")
             logger.error("2. Enable Remote Automation: Develop > Allow Remote Automation")
-            logger.error("3. Authorize safaridriver: /usr/bin/safaridriver --enable")
-            logger.error("   (You may need to enter your password)")
+            logger.error("3. Authorize safaridriver:")
+            logger.error("   Try: /usr/bin/safaridriver --enable")
+            logger.error("   Or:  sudo /usr/bin/safaridriver --enable")
+            logger.error("   (Enter your macOS user account password when prompted)")
+            logger.error("   If password fails, check System Settings > Privacy & Security")
             raise
     
     def _setup_chrome_driver(self):
@@ -184,15 +187,61 @@ class GooglePhotosDeleter:
         
         input()
         
-        # Check if we're on the photos page
+        # Check if we're on the photos page or redirected to promo/about page
         time.sleep(2)
         current_url = self.driver.current_url
-        if "photos.google.com" in current_url:
-            logger.info("Successfully navigated to Google Photos")
+        
+        # Handle redirect to promo/about page
+        if "photos.google.com/about" in current_url or "google.com/photos/about" in current_url:
+            logger.info("Detected redirect to promo page, navigating to photos page...")
+            # Try to navigate directly to the photos page
+            # The /u/1/ path is for the logged-in user's photos
+            self.driver.get("https://photos.google.com/u/1/")
+            time.sleep(3)
+            current_url = self.driver.current_url
+        
+        # Also try to dismiss any promo overlays or modals
+        try:
+            # Look for common dismiss buttons (X, Close, Skip, etc.)
+            dismiss_selectors = [
+                "button[aria-label*='Close']",
+                "button[aria-label*='close']",
+                "button[aria-label*='Dismiss']",
+                "button[aria-label*='dismiss']",
+                "button[aria-label*='Skip']",
+                "button[aria-label*='skip']",
+                "[role='button'][aria-label*='Close']",
+                ".close-button",
+                "[data-dismiss]",
+            ]
+            
+            for selector in dismiss_selectors:
+                try:
+                    dismiss_btn = self.driver.find_element(By.CSS_SELECTOR, selector)
+                    if dismiss_btn.is_displayed():
+                        dismiss_btn.click()
+                        logger.info("Dismissed promo overlay")
+                        time.sleep(1)
+                        break
+                except (NoSuchElementException, ElementClickInterceptedException):
+                    continue
+        except Exception as e:
+            logger.debug(f"Could not dismiss promo overlay: {e}")
+        
+        # Final check - navigate directly if still not on photos page
+        if "photos.google.com" not in current_url or "about" in current_url:
+            logger.info("Navigating directly to photos page...")
+            self.driver.get("https://photos.google.com/u/1/")
+            time.sleep(3)
+            current_url = self.driver.current_url
+        
+        if "photos.google.com" in current_url and "about" not in current_url:
+            logger.info(f"Successfully navigated to Google Photos: {current_url}")
             return True
         else:
-            logger.error(f"Unexpected URL: {current_url}")
-            return False
+            logger.warning(f"Still on unexpected URL: {current_url}")
+            logger.warning("You may need to manually navigate to https://photos.google.com/u/1/ in the browser")
+            return True  # Still return True to allow user to proceed
     
     def _select_all_photos(self) -> bool:
         """

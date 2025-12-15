@@ -44,7 +44,14 @@ This script allows you to delete all photos and videos from your Google Photos a
      #    Develop > Allow Remote Automation
      
      # 3. Authorize safaridriver (run in terminal):
+     #    Try without sudo first:
      /usr/bin/safaridriver --enable
+     
+     #    If that doesn't work, try with sudo:
+     sudo /usr/bin/safaridriver --enable
+     
+     #    You'll be prompted for your macOS user account password
+     #    (the password you use to log into your Mac)
      ```
    - That's it! Safari is ready to use.
 
@@ -167,9 +174,18 @@ If Safari fails to initialize:
 
 3. **Authorize safaridriver:**
    ```bash
+   # Try without sudo first:
    /usr/bin/safaridriver --enable
+   
+   # If that doesn't work or asks for password, try with sudo:
+   sudo /usr/bin/safaridriver --enable
    ```
-   You may be prompted for your password.
+   You'll be prompted for your **macOS user account password** (the password you use to log into your Mac). This is required because safaridriver needs administrator privileges to enable remote automation.
+   
+   **If password doesn't work:**
+   - Make sure you're using the password for the currently logged-in user
+   - On newer macOS versions, you may need to check System Settings > Privacy & Security > Developer Tools
+   - Try running with `sudo` if the non-sudo version fails
 
 **ChromeDriver Not Found:**
 
@@ -195,8 +211,16 @@ The script uses `webdriver-manager` which should automatically download ChromeDr
 **For Safari:**
 - Make sure Safari is installed (comes with macOS)
 - Verify Remote Automation is enabled: Develop > Allow Remote Automation
-- Run `/usr/bin/safaridriver --enable` if you haven't already
+- Run `/usr/bin/safaridriver --enable` or `sudo /usr/bin/safaridriver --enable` if you haven't already
 - Safari doesn't support headless mode - the browser window will always be visible
+
+**Safari Password Issues:**
+If you get "Password is not valid" when running `safaridriver --enable`:
+1. Try using `sudo`: `sudo /usr/bin/safaridriver --enable`
+2. Make sure you're entering the password for the currently logged-in macOS user
+3. Check System Settings > Privacy & Security > Developer Tools (on newer macOS versions)
+4. You may need to grant Terminal (or your terminal app) Full Disk Access in System Settings > Privacy & Security
+5. Try restarting Terminal and running the command again
 
 ### Photos Not Being Selected
 
@@ -239,6 +263,7 @@ pip install -r requirements.txt
 #    - Safari > Preferences > Advanced > Show Develop menu
 #    - Develop > Allow Remote Automation
 #    - Run: /usr/bin/safaridriver --enable
+#      (Enter your macOS user account password when prompted)
 
 # 4. Run dry-run first (safe, no deletion)
 python delete_google_photos.py --dry-run
