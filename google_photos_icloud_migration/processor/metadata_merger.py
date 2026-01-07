@@ -120,13 +120,10 @@ class MetadataMerger:
                     exif_date = self.convert_timestamp(timestamp)
                     if exif_date:
                         # Use separate date/time tags instead of -AllDates to avoid parsing issues
-                        # Format: "YYYY:MM:DD HH:MM:SS" -> split into date and time
-                        date_parts = exif_date.split(' ')
-                        if len(date_parts) == 2:
-                            date_str, time_str = date_parts
-                            args.extend(['-DateTimeOriginal', exif_date])
-                            args.extend(['-CreateDate', exif_date])
-                            args.extend(['-ModifyDate', exif_date])
+                        # Format: "YYYY:MM:DD HH:MM:SS" - ExifTool accepts this format directly
+                        args.extend(['-DateTimeOriginal', exif_date])
+                        args.extend(['-CreateDate', exif_date])
+                        args.extend(['-ModifyDate', exif_date])
             
             # Also check for creationTime
             if 'creationTime' in metadata:
@@ -292,8 +289,17 @@ class MetadataMerger:
                     # Copy file to output directory first (regular files or conversion disabled)
                     output_file = output_dir / media_file.name
                     import shutil
-                    shutil.copy2(media_file, output_file)
-                    media_file = output_file
+                    try:
+                        shutil.copy2(media_file, output_file)
+                        media_file = output_file
+                    except OSError as e:
+                        if e.errno == 28:  # No space left on device
+                            logger.error(f"❌ No space left on device. Cannot copy {media_file.name}")
+                            logger.error("Please free up disk space and try again.")
+                            results[media_file] = False
+                            continue
+                        else:
+                            raise
             
             try:
                 self.merge_metadata(media_file, json_file)

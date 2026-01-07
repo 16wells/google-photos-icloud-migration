@@ -100,7 +100,15 @@ def process_zip_file(
         # Process metadata
         logger.info("Processing metadata...")
         processed_dir = base_dir / "processed" / zip_path.stem
-        processed_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            processed_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            if e.errno == 28:  # No space left on device
+                logger.error(f"❌ No space left on device. Cannot create processed directory: {processed_dir}")
+                logger.error("Please free up disk space and try again.")
+                return False
+            else:
+                raise
         
         # Use merge_all_metadata which handles copying to output_dir and merging
         results = metadata_merger.merge_all_metadata(media_json_pairs, output_dir=processed_dir)
