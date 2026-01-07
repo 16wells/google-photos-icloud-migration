@@ -70,6 +70,11 @@ For stronger supply-chain hygiene:
 ### Path Security
 - All file paths are validated to prevent traversal attacks.
 - Zip slip protection is implemented in the extractor.
+- Symlink detection and skipping is implemented in the extractor (prevents symlink attacks).
 - Subprocess calls use list arguments (no shell=True) to prevent injection.
+
+### Symlink Handling
+- Symlinks in zip files are detected and skipped during extraction to prevent symlink attacks.
+- This is a low-risk defensive measure; Google Takeout zip files typically don't contain symlinks.
 
 

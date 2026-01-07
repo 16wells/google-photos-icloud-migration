@@ -73,9 +73,24 @@ class Extractor:
             # Get list of files to extract
             file_list = zip_ref.namelist()
             
-            # Extract with progress bar and path validation (prevent zip slip)
+            # Extract with progress bar and path validation (prevent zip slip and symlink attacks)
             extract_to_resolved = extract_to.resolve()
             for file_info in tqdm(file_list, desc=f"Extracting {zip_path.name}"):
+                # Skip symlinks in zip files (security: prevent symlink attacks)
+                # Check if this entry is a symlink by examining ZipInfo
+                try:
+                    zip_info = zip_ref.getinfo(file_info)
+                    # Check if this is a symlink (Linux/Unix symlinks in zip have mode 0o120000)
+                    if hasattr(zip_info, 'external_attr') and zip_info.external_attr:
+                        # Extract mode from external_attr (first 2 bytes on Unix)
+                        mode = (zip_info.external_attr >> 16) & 0o777
+                        if (zip_info.external_attr >> 28) == 0o12:  # S_IFLNK (symlink)
+                            logger.warning(f"Skipping symlink in zip file: {file_info} (security: symlink attacks)")
+                            continue
+                except (KeyError, AttributeError):
+                    # If we can't determine, proceed with normal validation
+                    pass
+                
                 # Validate path to prevent zip slip attack
                 target_path = (extract_to_resolved / file_info).resolve()
                 try:

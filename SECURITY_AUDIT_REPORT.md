@@ -216,21 +216,25 @@ pip install -r requirements-lock.txt
 
 ---
 
-### 📋 TODO: Symlink Handling in Extraction
+### ✅ IMPLEMENTED: Symlink Handling in Extraction
 
-**Status:** 📋 RECOMMENDATION  
+**Status:** ✅ IMPLEMENTED  
 **Severity:** LOW  
 **Risk:** Symlink attacks during extraction
 
-**Current State:**
-- Zip slip protection prevents directory traversal
-- No explicit symlink handling in extraction code
-- Python's `zipfile` module follows symlinks if they exist in zip (rare but possible)
+**Implementation:**
+- ✅ Added symlink detection in `extractor.py` before extraction
+- ✅ Symlinks in zip files are detected and skipped during extraction
+- ✅ Logs warning when symlink is skipped for security awareness
+- ✅ Documented in SECURITY.md
 
-**Recommendation:**
-- Consider adding symlink detection before extraction
-- Optionally skip symlinks or validate their targets
-- Document in SECURITY.md that symlinks in zip files are not explicitly handled (low risk for Google Takeout zips)
+**Technical Details:**
+- Checks ZipInfo `external_attr` for symlink mode (0o120000 / S_IFLNK)
+- Skips symlink entries entirely to prevent symlink attacks
+- Low risk for Google Takeout zips (they typically don't contain symlinks)
+- Defensive security measure to prevent potential attacks
+
+**Impact:** Prevents symlink-based attacks during zip extraction
 
 ---
 
@@ -307,10 +311,10 @@ pip install -r requirements-lock.txt
 - [x] Sensitive data in secure locations
 - [x] File permissions on token files
 
-### 📋 Supply Chain
-- [ ] Dependency vulnerability scanning
-- [ ] Version pinning strategy documented
-- [ ] CI/CD security checks
+### ✅ Supply Chain
+- [x] Dependency vulnerability scanning - ✅ IMPLEMENTED (`scripts/check_dependencies.py`)
+- [x] Version pinning strategy documented - ✅ IMPLEMENTED (`scripts/generate_lockfile.py`, documented in SECURITY.md)
+- [ ] CI/CD security checks - Not needed (local tool, no CI/CD deployment)
 
 ---
 
@@ -321,15 +325,15 @@ pip install -r requirements-lock.txt
 2. ✅ Improve token storage security
 3. ✅ Remove password length logging
 
-### Medium Priority (Recommended)
-1. 📋 Add dependency vulnerability scanning (`pip-audit`)
-2. 📋 Document dependency update process
-3. 📋 Add explicit file permission handling
+### Medium Priority (Completed)
+1. ✅ Add dependency vulnerability scanning (`pip-audit`) - IMPLEMENTED
+2. ✅ Document dependency update process - IMPLEMENTED
+3. ✅ Add explicit file permission handling - IMPLEMENTED
 
-### Low Priority (Nice to Have)
-1. 📋 Consider symlink handling in extraction
-2. 📋 Document symlink risks
-3. 📋 Add GitHub token usage notes
+### Low Priority (Completed)
+1. ✅ Consider symlink handling in extraction - IMPLEMENTED
+2. ✅ Document symlink risks - IMPLEMENTED (in SECURITY.md)
+3. ⚠️ GitHub token usage notes - ACCEPTABLE (documented in script, minor risk for utility script)
 
 ---
 
