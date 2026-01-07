@@ -119,7 +119,14 @@ class MetadataMerger:
                 if timestamp:
                     exif_date = self.convert_timestamp(timestamp)
                     if exif_date:
-                        args.extend(['-AllDates', exif_date])
+                        # Use separate date/time tags instead of -AllDates to avoid parsing issues
+                        # Format: "YYYY:MM:DD HH:MM:SS" -> split into date and time
+                        date_parts = exif_date.split(' ')
+                        if len(date_parts) == 2:
+                            date_str, time_str = date_parts
+                            args.extend(['-DateTimeOriginal', exif_date])
+                            args.extend(['-CreateDate', exif_date])
+                            args.extend(['-ModifyDate', exif_date])
             
             # Also check for creationTime
             if 'creationTime' in metadata:
@@ -127,7 +134,13 @@ class MetadataMerger:
                 if timestamp:
                     exif_date = self.convert_timestamp(timestamp)
                     if exif_date:
-                        args.extend(['-AllDates', exif_date])
+                        # Use separate date/time tags instead of -AllDates to avoid parsing issues
+                        date_parts = exif_date.split(' ')
+                        if len(date_parts) == 2:
+                            date_str, time_str = date_parts
+                            args.extend(['-DateTimeOriginal', exif_date])
+                            args.extend(['-CreateDate', exif_date])
+                            args.extend(['-ModifyDate', exif_date])
         
         # GPS coordinates
         if self.preserve_gps and 'geoData' in metadata:
@@ -136,11 +149,12 @@ class MetadataMerger:
             lon = geo.get('longitude')
             
             if lat is not None and lon is not None:
-                # ExifTool expects format: "lat, lon" or separate tags
-                args.extend(['-GPSLatitude', str(lat)])
-                args.extend(['-GPSLongitude', str(lon)])
+                # ExifTool expects decimal degrees format
+                # Ensure values are properly formatted as strings
+                args.extend(['-GPSLatitude', f'{lat:.6f}'])
+                args.extend(['-GPSLongitude', f'{lon:.6f}'])
                 
-                # Set GPS reference
+                # Set GPS reference (N/S for latitude, E/W for longitude)
                 args.extend(['-GPSLatitudeRef', 'N' if lat >= 0 else 'S'])
                 args.extend(['-GPSLongitudeRef', 'E' if lon >= 0 else 'W'])
         
@@ -148,13 +162,18 @@ class MetadataMerger:
         if self.preserve_descriptions:
             description = metadata.get('description', '')
             if description:
+                # Escape special characters that might cause issues
+                description = description.replace('\n', ' ').replace('\r', ' ')
                 args.extend(['-Description', description])
                 args.extend(['-Caption-Abstract', description])
                 args.extend(['-UserComment', description])
         
         # Title
         if 'title' in metadata:
-            args.extend(['-Title', metadata['title']])
+            title = metadata['title']
+            # Escape special characters
+            title = title.replace('\n', ' ').replace('\r', ' ')
+            args.extend(['-Title', title])
         
         # Add the media file path
         args.append(str(media_file))
