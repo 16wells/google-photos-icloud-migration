@@ -273,10 +273,20 @@ class MetadataMerger:
                     elif not success:
                         logger.warning(f"Video conversion failed for {media_file.name}, copying original (will fail upload)")
                         # Copy original - upload will fail with clear error
-                        import shutil
-                        output_file = output_dir / media_file.name
+                    import shutil
+                    output_file = output_dir / media_file.name
+                    try:
+                        shutil.copy2(media_file, output_file)
+                        # Set secure file permissions (owner read/write only)
                         try:
-                            shutil.copy2(media_file, output_file)
+                            output_file.chmod(0o600)
+                        except (OSError, PermissionError):
+                            pass  # Permission setting may fail on some systems
+                            # Set secure file permissions (owner read/write only)
+                            try:
+                                output_file.chmod(0o600)
+                            except (OSError, PermissionError):
+                                pass  # Permission setting may fail on some systems
                             media_file = output_file
                         except OSError as e:
                             if e.errno == 28:  # No space left on device
@@ -306,6 +316,11 @@ class MetadataMerger:
                     import shutil
                     try:
                         shutil.copy2(media_file, output_file)
+                        # Set secure file permissions (owner read/write only)
+                        try:
+                            output_file.chmod(0o600)
+                        except (OSError, PermissionError):
+                            pass  # Permission setting may fail on some systems
                         media_file = output_file
                     except OSError as e:
                         if e.errno == 28:  # No space left on device

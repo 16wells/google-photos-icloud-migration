@@ -12,6 +12,8 @@ It was such a huge task that I decided to throw it at Cursor AI and Claude to bu
 
 Disk space is managed as well as it can be - I did this on a MacBook Air with 512GB hard drive.  But it really takes a long time doing it this way.  What sped it up to an acceptable experience was attaching a 2 TB SSD hard drive and moving the default Photos library to that drive.  Then it had enough room to move through things pretty quickly.
 
+**Important:** This tool runs **locally on macOS only**. It requires direct access to your macOS iCloud account via PhotoKit framework. It cannot be run on virtual machines or cloud servers.
+
 It *does* run in the terminal only. Apologies if that's not your jam. But in the build, I had initially built a web-based tool and it was unreliable as hell because of the extended time to download the zip files timing out the webserver.  The terminal might not be everything you'd want, but it's stable and the sucker just keeps running.
 
 ## Features

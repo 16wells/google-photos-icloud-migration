@@ -86,6 +86,25 @@ class Extractor:
                         f"Path resolves outside extraction directory: {target_path}"
                     )
                 zip_ref.extract(file_info, extract_to)
+                
+                # Set secure file permissions after extraction
+                # Set files to 0600 (owner read/write) and directories to 0700 (owner access)
+                extracted_item = extract_to_resolved / file_info
+                if extracted_item.exists():
+                    try:
+                        if extracted_item.is_file():
+                            extracted_item.chmod(0o600)  # Owner read/write only
+                        elif extracted_item.is_dir():
+                            extracted_item.chmod(0o700)  # Owner access only
+                    except (OSError, PermissionError) as e:
+                        # Permission setting may fail on some systems, log but don't fail
+                        logger.debug(f"Could not set permissions for {extracted_item}: {e}")
+        
+        # Set directory permissions on extraction root
+        try:
+            extract_to.chmod(0o700)  # Owner access only
+        except (OSError, PermissionError) as e:
+            logger.debug(f"Could not set permissions for extraction directory {extract_to}: {e}")
         
         logger.info(f"Extracted {zip_path.name}")
         return extract_to

@@ -670,6 +670,7 @@ For isolation and to prevent conflicts, you can create a separate macOS user acc
 - Make sure `credentials.json` is in the tool directory
 - Verify the file is valid JSON: `python3 -c "import json; json.load(open('credentials.json'))"`
 - Re-download credentials from Google Cloud Console if needed
+- Run `python3 verify-oauth-setup.py` to diagnose OAuth issues
 
 ### PhotoKit Permission Issues
 

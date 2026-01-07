@@ -180,35 +180,39 @@ This security audit reviewed the codebase for common vulnerabilities including:
 
 ---
 
-### 📋 TODO: Dependency Security
+### ✅ IMPLEMENTED: Dependency Security
 
-**Status:** 📋 RECOMMENDATION  
+**Status:** ✅ IMPLEMENTED  
 **Severity:** MEDIUM  
 **Risk:** Supply chain attacks
 
-**Current State:**
-- Uses minimum version pinning (`>=`) which is good for flexibility
-- No maximum version constraints
-- No automated vulnerability scanning mentioned
+**Implementation:**
+1. ✅ **Added dependency vulnerability scanning script:**
+   - `scripts/check_dependencies.py` - Checks dependencies using `pip-audit`
+   - Can be run manually or integrated into CI/CD
+   - Supports `--fix` flag for automatic vulnerability fixes
 
-**Recommendations:**
-1. **Add dependency vulnerability scanning:**
-   ```bash
-   pip install pip-audit
-   pip-audit -r requirements.txt
-   ```
+2. ✅ **Added lock file generation script:**
+   - `scripts/generate_lockfile.py` - Generates `requirements-lock.txt` with exact versions
+   - Uses `pip-tools` for reproducible builds
+   - Documents installation from lock file
 
-2. **Consider version pinning for critical dependencies:**
-   - For production deployments, consider exact version pinning
-   - Use `pip-tools` to generate `requirements-lock.txt` with exact versions
+3. ✅ **Enhanced SECURITY.md:**
+   - Added dependency security section with `pip-audit` instructions
+   - Documented dependency update process
+   - Included best practices for supply chain security
 
-3. **Add to CI/CD:**
-   - Run `pip-audit` as part of CI pipeline
-   - Monitor for security advisories
+**Usage:**
+```bash
+# Check for vulnerabilities
+python scripts/check_dependencies.py
 
-4. **Document dependency update process:**
-   - Add section to SECURITY.md about updating dependencies
-   - Include links to security advisories for major dependencies
+# Generate lock file
+python scripts/generate_lockfile.py
+
+# Install from lock file (for reproducible builds)
+pip install -r requirements-lock.txt
+```
 
 ---
 
@@ -230,21 +234,24 @@ This security audit reviewed the codebase for common vulnerabilities including:
 
 ---
 
-### 📋 TODO: File Permissions on Created Files
+### ✅ IMPLEMENTED: File Permissions on Created Files
 
-**Status:** 📋 RECOMMENDATION  
+**Status:** ✅ IMPLEMENTED  
 **Severity:** LOW  
 **Risk:** Overly permissive files
 
-**Current State:**
-- Token files now have proper permissions (0600) ✅
-- No explicit permission setting for extracted/processed files
-- Files use default umask
+**Implementation:**
+- ✅ Token files have proper permissions (0600) 
+- ✅ **Extraction directory permissions:** Set to 0700 (owner access only) after extraction
+- ✅ **Extracted file permissions:** Set to 0600 (owner read/write) for files, 0700 for directories
+- ✅ **Processed file permissions:** Set to 0600 (owner read/write) when copying to processed directory
+- ✅ Graceful handling if permission setting fails (logs debug message, doesn't fail operation)
 
-**Recommendation:**
-- Consider setting explicit permissions on extracted/processed directories
-- Use mode 0700 for directories, 0600 for files containing user data
-- Document expected permissions in SECURITY.md
+**Location:**
+- `google_photos_icloud_migration/processor/extractor.py` - Extraction permissions
+- `google_photos_icloud_migration/processor/metadata_merger.py` - Processed file permissions
+
+**Note:** Permission setting may fail on some systems (e.g., network filesystems), but the code handles this gracefully without failing the operation.
 
 ---
 
