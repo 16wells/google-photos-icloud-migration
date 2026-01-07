@@ -278,6 +278,21 @@ def main():
         log_file=logging_config.get('file', 'migration.log')
     )
     
+    # Setup base directory (needed for state manager)
+    base_dir = Path(config['processing']['base_dir'])
+    try:
+        base_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        if e.errno == 28:  # No space left on device
+            logger.error(f"❌ No space left on device. Cannot create base directory: {base_dir}")
+            logger.error("Please free up disk space and try again.")
+            sys.exit(1)
+        else:
+            raise
+    
+    # Setup state manager for tracking processed zips (must be before filtering zip files)
+    state_manager = StateManager(base_dir) if (args.skip_processed or args.retry_failed) else None
+    
     # Find zip files
     takeout_dir = args.takeout_dir
     if not takeout_dir.exists():
@@ -328,21 +343,7 @@ def main():
                 status = " [retrying]"
         logger.info(f"  - {zip_file.name} ({size_mb:.1f} MB){status}")
     
-    # Setup components
-    base_dir = Path(config['processing']['base_dir'])
-    try:
-        base_dir.mkdir(parents=True, exist_ok=True)
-    except OSError as e:
-        if e.errno == 28:  # No space left on device
-            logger.error(f"❌ No space left on device. Cannot create base directory: {base_dir}")
-            logger.error("Please free up disk space and try again.")
-            sys.exit(1)
-        else:
-            raise
-    
-    # Setup state manager for tracking processed zips (must be before filtering zip files)
-    state_manager = StateManager(base_dir) if (args.skip_processed or args.retry_failed) else None
-    
+    # Setup components (base_dir already initialized above)
     extractor = Extractor(base_dir)
     metadata_config = config['metadata']
     metadata_merger = MetadataMerger(
