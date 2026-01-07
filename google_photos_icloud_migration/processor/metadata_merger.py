@@ -276,8 +276,16 @@ class MetadataMerger:
                         # Copy original - upload will fail with clear error
                         import shutil
                         output_file = output_dir / media_file.name
-                        shutil.copy2(media_file, output_file)
-                        media_file = output_file
+                        try:
+                            shutil.copy2(media_file, output_file)
+                            media_file = output_file
+                        except OSError as e:
+                            if e.errno == 28:  # No space left on device
+                                logger.error(f"❌ No space left on device. Cannot copy {media_file.name}")
+                                results[media_file] = False
+                                continue
+                            else:
+                                raise
                     else:
                         # File already converted or conversion not needed
                         import shutil
