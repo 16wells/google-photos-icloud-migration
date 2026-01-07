@@ -536,11 +536,19 @@ Before running, you'll need to grant permission to access your Photos library:
 
 Run the migration using the command line:
 
-For the recommended PhotoKit method (preserves metadata, supports albums):
+**Option A: Process local zip files (if you already have Google Takeout zips):**
+
+```bash
+python3 process_local_zips.py --use-sync --takeout-dir "/path/to/your/zips"
+```
+
+**Option B: Download from Google Drive and process:**
 
 ```bash
 python3 main.py --config config.yaml --use-sync
 ```
+
+Both methods use the recommended PhotoKit method (preserves metadata, supports albums).
 
 **Why PhotoKit Method?**
 - ✅ **Native Photos App Integration**: Uses macOS Photos app with built-in iCloud Photos sync

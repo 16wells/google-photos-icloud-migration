@@ -4,12 +4,12 @@
 
 **Short (160 chars max):**
 ```
-Migrate photos from Google Photos (Takeout) to iCloud Photos on macOS. Preserves metadata, albums, and includes a modern web UI with real-time progress tracking.
+Migrate photos from Google Photos (Takeout) to iCloud Photos on macOS. Preserves metadata, albums, and album structures. Terminal-based tool.
 ```
 
 **Alternative shorter version:**
 ```
-macOS tool to migrate Google Photos to iCloud Photos with metadata preservation and modern web UI
+macOS tool to migrate Google Photos to iCloud Photos with metadata preservation (terminal-based)
 ```
 
 ## Suggested Topics/Tags
@@ -30,20 +30,17 @@ Add these topics to your repository:
 - `google-takeout`
 - `photo-sync`
 - `album-migration`
-- `web-ui`
-- `flask`
-- `socketio`
 - `photo-management`
 - `icloud`
 - `google-drive`
+- `terminal-tool`
 
 ### Technology Topics
 - `python3`
-- `flask-webapp`
-- `websocket`
 - `exif-metadata`
 - `oauth2`
 - `api-integration`
+- `photokit-framework`
 
 ## How to Add Description and Topics
 

@@ -95,18 +95,52 @@ Environment variables take precedence over `config.yaml` values. See [AUTHENTICA
 
 ## Usage
 
-### Command Line Usage
+### Processing Local Zip Files (Recommended for Local Processing)
+
+If you already have Google Takeout zip files downloaded locally, use `process_local_zips.py`:
 
 ```bash
-python main.py --config config.yaml
+python3 process_local_zips.py --use-sync --takeout-dir "/path/to/your/zips"
 ```
+
+**Key features:**
+- Processes zip files from local directory (no Google Drive download needed)
+- Supports `--skip-processed` to skip already-processed zips
+- Supports `--retry-failed` to retry previously failed zips
+- Uses PhotoKit sync method (macOS only, recommended)
+
+**Example:**
+```bash
+# Process all zips, skipping already-processed ones
+python3 process_local_zips.py --use-sync --skip-processed --retry-failed
+
+# Process specific directory
+python3 process_local_zips.py --use-sync --takeout-dir "/Volumes/X10 Pro/Takeout"
+```
+
+### Downloading from Google Drive
+
+If you need to download zip files from Google Drive first, use `main.py`:
+
+```bash
+python3 main.py --config config.yaml --use-sync
+```
+
+This method:
+1. Downloads zip files from Google Drive
+2. Extracts and processes them
+3. Uploads to iCloud Photos
 
 ### Using Photos Library Sync Method (Recommended)
 
 For the most reliable uploads with full EXIF metadata preservation, use the PhotoKit-based sync method (macOS only):
 
 ```bash
-python main.py --config config.yaml --use-sync
+# For local zip processing
+python3 process_local_zips.py --use-sync
+
+# For Google Drive download
+python3 main.py --config config.yaml --use-sync
 ```
 
 This method uses Apple's PhotoKit framework to save photos directly to your Photos library, which then automatically syncs to iCloud Photos. This approach:
@@ -117,21 +151,30 @@ This method uses Apple's PhotoKit framework to save photos directly to your Phot
 
 ### Retrying Failed Uploads
 
-If some files fail to upload, they are automatically saved to `failed_uploads.json`. To retry only the failed uploads (skipping download/extract/process steps):
-
+**For local zip processing:**
 ```bash
-python main.py --config config.yaml --retry-failed
+python3 process_local_zips.py --use-sync --retry-failed
 ```
 
-You can also combine with `--use-sync`:
-
+**For Google Drive processing:**
 ```bash
-python main.py --config config.yaml --retry-failed --use-sync
+python3 main.py --config config.yaml --retry-failed --use-sync
 ```
+
+Failed uploads are automatically tracked and can be retried without re-processing the entire zip file.
 
 
 ## How It Works
 
+**For local zip processing (`process_local_zips.py`):**
+1. **Find Zips**: Scans directory for Google Takeout zip files
+2. **Extract**: Extracts zip files maintaining directory structure
+3. **Process Metadata**: Merges JSON metadata into media files using ExifTool
+4. **Parse Albums**: Extracts album structure from directory hierarchy and JSON metadata
+5. **Upload**: Uploads processed files to iCloud Photos using PhotoKit
+6. **Cleanup**: Removes temporary files (if configured)
+
+**For Google Drive download (`main.py`):**
 1. **Download**: Downloads all Google Takeout zip files from Google Drive
 2. **Extract**: Extracts zip files maintaining directory structure
 3. **Process Metadata**: Merges JSON metadata into media files using ExifTool

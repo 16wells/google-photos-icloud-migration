@@ -31,10 +31,17 @@ cp config.yaml.example config.yaml
 
 3. **Run the migration:**
 
+   **Option A: Process local zip files (if you already have Google Takeout zips):**
+   ```bash
+   python3 process_local_zips.py --use-sync --takeout-dir "/path/to/your/zips"
+   ```
+   
+   **Option B: Download from Google Drive and process:**
    ```bash
    python3 main.py --config config.yaml --use-sync
    ```
-   This uses Apple's PhotoKit framework to save photos directly to your Photos library, which then syncs to iCloud Photos automatically.
+   
+   Both methods use Apple's PhotoKit framework to save photos directly to your Photos library, which then syncs to iCloud Photos automatically.
 
 ## Configuration Essentials
 

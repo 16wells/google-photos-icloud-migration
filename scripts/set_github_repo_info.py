@@ -42,7 +42,7 @@ except ImportError:
 REPO_OWNER = "16wells"  # Update if different
 REPO_NAME = "google-photos-icloud-migration"  # Update if different
 
-DESCRIPTION = "Migrate photos from Google Photos (Takeout) to iCloud Photos on macOS. Preserves metadata, albums, and includes a modern web UI with real-time progress tracking."
+DESCRIPTION = "Migrate photos from Google Photos (Takeout) to iCloud Photos on macOS. Preserves metadata, albums, and album structures. Terminal-based tool."
 
 TOPICS = [
     "google-photos",
@@ -56,18 +56,15 @@ TOPICS = [
     "google-takeout",
     "photo-sync",
     "album-migration",
-    "web-ui",
-    "flask",
-    "socketio",
     "photo-management",
     "icloud",
     "google-drive",
     "python3",
-    "flask-webapp",
-    "websocket",
     "exif-metadata",
     "oauth2",
-    "api-integration"
+    "api-integration",
+    "photokit-framework",
+    "terminal-tool"
 ]
 
 
