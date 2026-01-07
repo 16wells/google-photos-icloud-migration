@@ -40,8 +40,36 @@ This project currently uses version ranges in `requirements.txt` (e.g. `package>
 
 For stronger supply-chain hygiene:
 
-- Generate a lock file (e.g. `pip-tools` → `requirements.lock.txt`).
-- Use `pip-audit` (or GitHub Dependabot) in CI.
-- Prefer virtual environments and avoid running as root.
+- **Generate a lock file** (e.g. `pip-tools` → `requirements.lock.txt`) for reproducible builds.
+- **Use `pip-audit`** to scan for known vulnerabilities:
+  ```bash
+  pip install pip-audit
+  pip-audit -r requirements.txt
+  ```
+- **Enable GitHub Dependabot** to receive automated security alerts.
+- **Prefer virtual environments** and avoid running as root.
+- **Keep dependencies updated** but test changes before deploying to production.
+
+## Security Best Practices
+
+### Token Storage
+- OAuth tokens are stored in `~/.config/google-photos-icloud-migration/token.json` (default) with permissions 0600.
+- Legacy `token.json` in project directory is supported but less secure.
+- Never commit token files to git (already in `.gitignore`).
+
+### File Permissions
+- Token files: 0600 (owner read/write only)
+- Config directory: 0700 (owner access only)
+- Extracted/processed files: Use default umask (typically 0644/0755)
+
+### Logging
+- No passwords, tokens, or secrets are logged.
+- Log files may contain file paths and Apple ID email addresses.
+- Log files are gitignored but keep them private in production.
+
+### Path Security
+- All file paths are validated to prevent traversal attacks.
+- Zip slip protection is implemented in the extractor.
+- Subprocess calls use list arguments (no shell=True) to prevent injection.
 
 
