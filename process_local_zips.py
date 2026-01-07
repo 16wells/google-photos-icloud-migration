@@ -261,7 +261,15 @@ def main():
     
     # Setup components
     base_dir = Path(config['processing']['base_dir'])
-    base_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        base_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        if e.errno == 28:  # No space left on device
+            logger.error(f"❌ No space left on device. Cannot create base directory: {base_dir}")
+            logger.error("Please free up disk space and try again.")
+            sys.exit(1)
+        else:
+            raise
     
     extractor = Extractor(base_dir)
     metadata_config = config['metadata']
