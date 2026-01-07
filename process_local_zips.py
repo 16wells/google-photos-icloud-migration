@@ -340,7 +340,7 @@ def main():
         else:
             raise
     
-    # Setup state manager for tracking processed zips
+    # Setup state manager for tracking processed zips (must be before filtering zip files)
     state_manager = StateManager(base_dir) if (args.skip_processed or args.retry_failed) else None
     
     extractor = Extractor(base_dir)
