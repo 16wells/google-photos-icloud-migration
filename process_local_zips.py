@@ -7,7 +7,7 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Dict
 import yaml
 import zipfile
 
@@ -16,6 +16,7 @@ from google_photos_icloud_migration.processor.metadata_merger import MetadataMer
 from google_photos_icloud_migration.parser.album_parser import AlbumParser
 from google_photos_icloud_migration.uploader.icloud_uploader import iCloudPhotosSyncUploader
 from google_photos_icloud_migration.utils.logging_config import setup_logging
+from google_photos_icloud_migration.utils.state_manager import StateManager, ZipProcessingState
 
 logger = logging.getLogger(__name__)
 
@@ -44,12 +45,19 @@ def process_zip_file(
     uploader: iCloudPhotosSyncUploader,
     zip_number: int,
     total_zips: int,
-    cleanup: bool = True
+    cleanup: bool = True,
+    state_manager: Optional[StateManager] = None
 ) -> bool:
     """Process a single zip file: extract, process metadata, upload."""
     logger.info("=" * 60)
     logger.info(f"Processing zip {zip_number}/{total_zips}: {zip_path.name}")
     logger.info("=" * 60)
+    
+    # Check if zip was already processed
+    if state_manager:
+        if state_manager.is_zip_complete(zip_path.name):
+            logger.info(f"⏭️  Skipping {zip_path.name} - already processed successfully")
+            return True
     
     try:
         # Validate zip file
@@ -68,8 +76,16 @@ def process_zip_file(
         try:
             extracted_dir = extractor.extract_zip(zip_path)
             logger.info(f"Extracted to: {extracted_dir}")
+            if state_manager:
+                state_manager.mark_zip_extracted(zip_path.name, str(extracted_dir))
         except Exception as e:
             logger.error(f"Error extracting {zip_path.name}: {e}")
+            if state_manager:
+                state_manager.mark_zip_failed(
+                    zip_path.name,
+                    ZipProcessingState.FAILED_EXTRACTION,
+                    str(e)
+                )
             return False
         
         # Find the Google Photos subfolder
@@ -179,6 +195,17 @@ def process_zip_file(
         if failed_count > 0:
             logger.warning(f"⚠️  {failed_count} files failed to upload. Check logs for details.")
         
+        # Update state
+        if state_manager:
+            if uploaded_count > 0:
+                state_manager.mark_zip_uploaded(zip_path.name)
+            elif failed_count > 0:
+                state_manager.mark_zip_failed(
+                    zip_path.name,
+                    ZipProcessingState.FAILED_UPLOAD,
+                    f"{failed_count} files failed to upload"
+                )
+        
         # Cleanup extracted files if requested
         if cleanup:
             logger.info(f"Cleaning up extracted directory: {extracted_dir}")
@@ -221,6 +248,16 @@ def main():
         action="store_true",
         help="Don't clean up extracted files after processing"
     )
+    parser.add_argument(
+        "--skip-processed",
+        action="store_true",
+        help="Skip zip files that have already been processed successfully"
+    )
+    parser.add_argument(
+        "--retry-failed",
+        action="store_true",
+        help="Retry processing zip files that previously failed"
+    )
     
     args = parser.parse_args()
     
@@ -254,10 +291,42 @@ def main():
         logger.info("Looking for zip files matching 'takeout*.zip' pattern")
         sys.exit(1)
     
-    logger.info(f"Found {len(zip_files)} zip files:")
+    # Filter zip files based on flags
+    if state_manager:
+        if args.skip_processed:
+            original_count = len(zip_files)
+            zip_files = [z for z in zip_files if not state_manager.is_zip_complete(z.name)]
+            skipped_count = original_count - len(zip_files)
+            if skipped_count > 0:
+                logger.info(f"⏭️  Skipping {skipped_count} already-processed zip file(s)")
+        
+        if args.retry_failed:
+            # Include failed zips in the list
+            failed_zips = state_manager.get_zips_by_state(ZipProcessingState.FAILED_UPLOAD)
+            failed_zips.extend(state_manager.get_zips_by_state(ZipProcessingState.FAILED_EXTRACTION))
+            if failed_zips:
+                logger.info(f"🔄 Retrying {len(failed_zips)} previously failed zip file(s)")
+                # Add failed zips to the list if not already there
+                zip_file_names = {z.name for z in zip_files}
+                for failed_zip_name in failed_zips:
+                    # Find the actual zip file path
+                    for zip_file in find_zip_files(takeout_dir):
+                        if zip_file.name == failed_zip_name and zip_file.name not in zip_file_names:
+                            zip_files.append(zip_file)
+                            zip_file_names.add(zip_file.name)
+                            break
+    
+    logger.info(f"Found {len(zip_files)} zip file(s) to process:")
     for zip_file in zip_files:
         size_mb = zip_file.stat().st_size / (1024 * 1024)
-        logger.info(f"  - {zip_file.name} ({size_mb:.1f} MB)")
+        status = ""
+        if state_manager:
+            zip_state = state_manager.get_zip_state(zip_file.name)
+            if zip_state == ZipProcessingState.UPLOADED.value:
+                status = " [already processed]"
+            elif zip_state in [ZipProcessingState.FAILED_UPLOAD.value, ZipProcessingState.FAILED_EXTRACTION.value]:
+                status = " [retrying]"
+        logger.info(f"  - {zip_file.name} ({size_mb:.1f} MB){status}")
     
     # Setup components
     base_dir = Path(config['processing']['base_dir'])
@@ -270,6 +339,9 @@ def main():
             sys.exit(1)
         else:
             raise
+    
+    # Setup state manager for tracking processed zips
+    state_manager = StateManager(base_dir) if (args.skip_processed or args.retry_failed) else None
     
     extractor = Extractor(base_dir)
     metadata_config = config['metadata']
@@ -302,11 +374,19 @@ def main():
             uploader,
             i,
             len(zip_files),
-            cleanup=not args.no_cleanup
+            cleanup=not args.no_cleanup,
+            state_manager=state_manager
         ):
             successful += 1
         else:
             failed += 1
+            # Mark as failed in state manager
+            if state_manager:
+                state_manager.mark_zip_failed(
+                    zip_file.name,
+                    ZipProcessingState.FAILED_UPLOAD,
+                    "Processing failed"
+                )
         
         # Ask if user wants to continue (optional - can be removed for fully automated)
         if i < len(zip_files):
