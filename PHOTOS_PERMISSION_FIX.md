@@ -4,6 +4,14 @@
 
 macOS sometimes doesn't show permission dialogs when running Python scripts from Terminal. This is a known limitation of macOS's TCC (Transparency, Consent, and Control) system.
 
+**Important:** macOS treats different terminal applications as separate apps. If you're using:
+- **Terminal.app** (native macOS Terminal) - grant permission to "Terminal"
+- **Cursor's integrated terminal** - grant permission to "Cursor"
+- **VS Code's integrated terminal** - grant permission to "Visual Studio Code"
+- **iTerm2** - grant permission to "iTerm2"
+
+Each terminal app needs its own permission!
+
 ## Solution 1: Manual Permission Grant (Recommended)
 
 1. **Open System Settings**
@@ -13,15 +21,20 @@ macOS sometimes doesn't show permission dialogs when running Python scripts from
 2. **Navigate to Photos Privacy**
    - Go to: **Privacy & Security** → **Photos**
 
-3. **Add Terminal or Python**
-   - Look for "Terminal" or "Python" in the list
+3. **Add Your Terminal Application**
+   - **If using Terminal.app**: Look for "Terminal" in the list
+   - **If using Cursor**: Look for "Cursor" in the list
+   - **If using VS Code**: Look for "Visual Studio Code" in the list
+   - **If using iTerm2**: Look for "iTerm2" in the list
    - If not listed:
-     - Click the **"+"** button (if available) to add Terminal
+     - Click the **"+"** button (if available) to add your terminal app
      - Or use Solution 2 below
 
 4. **Enable Permission**
-   - Check the box next to Terminal/Python
+   - Check the box next to your terminal application
    - Select **"Add Photos Only"** (sufficient) or **"Read and Write"**
+
+**Note:** You may need to grant permission to both your terminal app AND Python, depending on how macOS identifies the process.
 
 ## Solution 2: Reset Permissions
 
@@ -78,17 +91,27 @@ You should see: "✓ Photo library permission already granted!"
 
 ## Troubleshooting
 
+### "Works in Terminal.app but not in Cursor/VS Code"
+
+**This is expected!** Each terminal application needs its own permission:
+- Terminal.app → grant permission to "Terminal"
+- Cursor → grant permission to "Cursor"
+- VS Code → grant permission to "Visual Studio Code"
+- iTerm2 → grant permission to "iTerm2"
+
+**Solution:** Grant permission to the specific terminal app you're using, or use Terminal.app to run the migration.
+
 ### "No apps listed in Photos privacy settings"
 
 This means no app has requested Photos permission yet. Try:
 1. Run `python3 request_photos_permission.py`
 2. If no dialog appears, use Solution 2 (reset permissions)
-3. Or manually add Terminal using Solution 1
+3. Or manually add your terminal app using Solution 1
 
 ### "Permission denied" error
 
 1. Check System Settings > Privacy & Security > Photos
-2. Make sure Terminal/Python has permission enabled
+2. Make sure your terminal app (Terminal/Cursor/VS Code) has permission enabled
 3. Try resetting: `sudo tccutil reset Photos`
 4. Re-run the permission request
 
