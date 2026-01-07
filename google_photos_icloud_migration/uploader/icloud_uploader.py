@@ -105,7 +105,7 @@ class iCloudUploader:
                 raise ValueError("Password cannot be empty")
             
             # Log password length for debugging (but not the actual password)
-            logger.debug(f"Password length: {len(self.password)} characters")
+            # Avoid logging password length (can still be sensitive metadata)
             
             # CRITICAL: Patch pyicloud BEFORE creating any instances
             # The patches must be applied at the class level before PyiCloudService.__init__ is called

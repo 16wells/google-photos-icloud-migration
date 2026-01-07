@@ -95,12 +95,20 @@ def check_token_file(token_file: str = "token.json") -> Dict[str, Any]:
     print("=" * 60)
     print()
     
-    token_path = Path(token_file)
+    # Backward compatibility: if legacy token.json exists in CWD, prefer it
+    legacy = Path(token_file)
+    if legacy.exists():
+        token_path = legacy
+    else:
+        xdg_config_home = os.environ.get('XDG_CONFIG_HOME')
+        base_dir = Path(xdg_config_home) if xdg_config_home else (Path.home() / '.config')
+        token_path = base_dir / 'google-photos-icloud-migration' / token_file
     
     if not token_path.exists():
         print(f"⚠️  Token file not found: {token_file}")
         print("   This is normal if you haven't authenticated yet.")
         print("   The token will be created automatically on first authentication.")
+        print(f"   Expected location: {token_path}")
         print()
         return {'exists': False, 'valid': False}
     

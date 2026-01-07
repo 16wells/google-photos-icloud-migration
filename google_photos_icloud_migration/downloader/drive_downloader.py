@@ -26,6 +26,24 @@ SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
 
 class DriveDownloader:
     """Handles downloading files from Google Drive."""
+
+    def _get_token_file_path(self) -> Path:
+        """
+        Determine where to store the OAuth token file.
+
+        Security note: token.json contains refresh tokens and access tokens.
+        Prefer a per-user config directory with restrictive permissions.
+        """
+        # Backward compatibility: if legacy token.json exists in CWD, keep using it
+        legacy = Path('token.json')
+        if legacy.exists():
+            return legacy
+
+        xdg_config_home = os.environ.get('XDG_CONFIG_HOME')
+        base_dir = Path(xdg_config_home) if xdg_config_home else (Path.home() / '.config')
+        token_dir = base_dir / 'google-photos-icloud-migration'
+        token_dir.mkdir(parents=True, exist_ok=True)
+        return token_dir / 'token.json'
     
     def __init__(self, credentials_file: str):
         """
@@ -41,11 +59,11 @@ class DriveDownloader:
     def _authenticate(self):
         """Authenticate with Google Drive API."""
         creds = None
-        token_file = 'token.json'
+        token_file = self._get_token_file_path()
         
         # Load existing token if available
-        if os.path.exists(token_file):
-            creds = Credentials.from_authorized_user_file(token_file, SCOPES)
+        if token_file.exists():
+            creds = Credentials.from_authorized_user_file(str(token_file), SCOPES)
         
         # If there are no (valid) credentials available, let the user log in
         if not creds or not creds.valid:
@@ -95,6 +113,11 @@ class DriveDownloader:
             # Save the credentials for the next run
             with open(token_file, 'w') as token:
                 token.write(creds.to_json())
+            # Restrict permissions (best-effort; may not work on all platforms/filesystems)
+            try:
+                os.chmod(token_file, 0o600)
+            except Exception:
+                pass
         
         self.service = build('drive', 'v3', credentials=creds)
         logger.info("Successfully authenticated with Google Drive API")

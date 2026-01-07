@@ -126,7 +126,7 @@ Or run the main script - it will prompt for authentication automatically.
 
 ## What Gets Created
 
-- **`credentials.json`**: OAuth client ID and secret (one-time setup, safe to share)
+- **`credentials.json`**: OAuth client ID **and client secret** (one-time setup). **Treat this as sensitive** (don’t commit to git; don’t share publicly).
 - **`token.json`**: Your access token (auto-generated, keep private)
 
 The `token.json` file allows the tool to access your Google Drive without asking for your password every time.
@@ -137,7 +137,7 @@ The `token.json` file allows the tool to access your Google Drive without asking
 - ✅ Your Google password is never stored
 - ✅ Tokens can be revoked at any time
 - ✅ Access is limited to Google Drive read-only
-- ⚠️ `credentials.json` contains OAuth client secrets (safe to share, but don't commit to public repos)
+- ⚠️ `credentials.json` contains an OAuth **client secret**. **Keep it private** and **never commit it**.
 - ⚠️ `token.json` contains your access token (keep private)
 
 ## Revoking Access

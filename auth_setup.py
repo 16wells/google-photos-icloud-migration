@@ -23,7 +23,25 @@ class GoogleAuthSetup:
     
     def __init__(self):
         self.credentials_file = "credentials.json"
-        self.token_file = "token.json"
+        self.token_file = self._get_token_file_path()
+
+    def _get_token_file_path(self) -> Path:
+        """
+        Determine where to store the OAuth token file.
+
+        Security note: token.json contains refresh tokens and access tokens.
+        Prefer a per-user config directory with restrictive permissions.
+        """
+        # Backward compatibility: if legacy token.json exists in CWD, keep using it
+        legacy = Path('token.json')
+        if legacy.exists():
+            return legacy
+
+        xdg_config_home = os.environ.get('XDG_CONFIG_HOME')
+        base_dir = Path(xdg_config_home) if xdg_config_home else (Path.home() / '.config')
+        token_dir = base_dir / 'google-photos-icloud-migration'
+        token_dir.mkdir(parents=True, exist_ok=True)
+        return token_dir / 'token.json'
     
     def check_credentials_exist(self) -> bool:
         """Check if credentials.json already exists."""
@@ -244,7 +262,7 @@ class GoogleAuthSetup:
             
             creds = None
             if Path(self.token_file).exists():
-                creds = Credentials.from_authorized_user_file(self.token_file, SCOPES)
+                creds = Credentials.from_authorized_user_file(str(self.token_file), SCOPES)
             
             if not creds or not creds.valid:
                 if creds and creds.expired and creds.refresh_token:
@@ -266,6 +284,11 @@ class GoogleAuthSetup:
                 # Save token for next time
                 with open(self.token_file, 'w') as token:
                     token.write(creds.to_json())
+                # Restrict permissions (best-effort; may not work on all platforms/filesystems)
+                try:
+                    os.chmod(self.token_file, 0o600)
+                except Exception:
+                    pass
             
             print("✓ Successfully authenticated with Google Drive!")
             return True
@@ -292,7 +315,7 @@ class GoogleAuthSetup:
                 print("⚠️  Not authenticated yet. Please authenticate first.")
                 return None
             
-            creds = Credentials.from_authorized_user_file(self.token_file, SCOPES)
+            creds = Credentials.from_authorized_user_file(str(self.token_file), SCOPES)
             if not creds or not creds.valid:
                 print("⚠️  Authentication expired. Please re-authenticate.")
                 return None
