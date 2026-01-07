@@ -2,6 +2,13 @@
 """
 Process already-extracted Google Takeout folders from the Downloads folder.
 This script bypasses the zip download/extraction step and processes folders directly.
+
+NOTE: For most use cases, use process_local_zips.py instead, which:
+- Processes zip files directly (extracts automatically)
+- Has state tracking (--skip-processed, --retry-failed)
+- Is more feature-complete
+
+Use this script only if you have already-extracted folders and want to skip extraction.
 """
 import argparse
 import logging
