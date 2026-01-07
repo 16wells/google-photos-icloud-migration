@@ -1911,7 +1911,9 @@ class iCloudPhotosSyncUploader:
             elif current_status == self.PHAuthorizationStatusNotDetermined:
                 # Request permission
                 logger.info("Requesting photo library write permission...")
-                logger.info("You may be prompted to grant permission in System Settings")
+                logger.info("⚠️  IMPORTANT: A permission dialog should appear.")
+                logger.info("   If no dialog appears, you may need to grant permission manually.")
+                logger.info("   Run 'python3 request_photos_permission.py' to trigger the dialog.")
                 
                 # Request authorization using pyobjc's callback mechanism
                 from Foundation import NSRunLoop, NSDefaultRunLoopMode
@@ -1930,8 +1932,10 @@ class iCloudPhotosSyncUploader:
                 
                 # Wait for callback (with timeout)
                 from Foundation import NSDate
-                timeout = 30  # 30 seconds
+                timeout = 60  # Give user more time to respond
                 start_time = time.time()
+                logger.info(f"Waiting for permission response (up to {timeout} seconds)...")
+                
                 while not callback_called[0] and (time.time() - start_time) < timeout:
                     NSRunLoop.currentRunLoop().runMode_beforeDate_(
                         NSDefaultRunLoopMode,
@@ -1940,7 +1944,16 @@ class iCloudPhotosSyncUploader:
                     time.sleep(0.1)
                 
                 if not callback_called[0]:
-                    logger.warning("Permission request timed out")
+                    logger.warning("⚠️  Permission request timed out - no dialog appeared")
+                    logger.warning("")
+                    logger.warning("This usually means macOS didn't show the permission dialog.")
+                    logger.warning("Please run this helper script to trigger the dialog:")
+                    logger.warning("  python3 request_photos_permission.py")
+                    logger.warning("")
+                    logger.warning("Or manually grant permission:")
+                    logger.warning("1. Open System Settings > Privacy & Security > Photos")
+                    logger.warning("2. Add Terminal or Python to the list if not present")
+                    logger.warning("3. Enable 'Add Photos Only' permission")
                     return False
                 
                 status = auth_status[0]
@@ -1949,6 +1962,11 @@ class iCloudPhotosSyncUploader:
                     return True
                 else:
                     logger.error("Photo library write permission denied by user")
+                    logger.error("")
+                    logger.error("To grant permission manually:")
+                    logger.error("1. Open System Settings > Privacy & Security > Photos")
+                    logger.error("2. Find 'Terminal' or 'Python' in the list")
+                    logger.error("3. Enable 'Add Photos Only' or 'Read and Write' permission")
                     return False
             else:
                 logger.warning(f"Unknown authorization status: {current_status}")
@@ -2267,15 +2285,17 @@ class iCloudPhotosSyncUploader:
             if auth_status not in (self.PHAuthorizationStatusAuthorized, self.PHAuthorizationStatusLimited):
                 logger.error("❌ Photo library write permission not granted")
                 logger.error("")
-                logger.error("To fix this:")
-                logger.error("1. Open System Settings (or System Preferences on older macOS)")
-                logger.error("2. Go to Privacy & Security > Photos")
-                logger.error("3. Find 'Terminal' (or 'Python') in the list")
-                logger.error("4. Enable 'Add Photos Only' or 'Read and Write' permission")
+                logger.error("To fix this, run the permission helper script first:")
+                logger.error("  python3 request_photos_permission.py")
                 logger.error("")
-                logger.error("Alternatively, you can:")
-                logger.error("- Run the script again and grant permission when prompted")
-                logger.error("- Or manually grant permission in System Settings before running")
+                logger.error("Or manually grant permission:")
+                logger.error("1. Open System Settings > Privacy & Security > Photos")
+                logger.error("2. Look for 'Terminal' or 'Python' in the list")
+                logger.error("   (If not listed, the permission dialog hasn't appeared yet)")
+                logger.error("3. Enable 'Add Photos Only' or 'Read and Write' permission")
+                logger.error("")
+                logger.error("Note: If no apps are listed, run: python3 request_photos_permission.py")
+                logger.error("      This will trigger the permission dialog.")
                 return False
             
             # Convert file path to NSURL
