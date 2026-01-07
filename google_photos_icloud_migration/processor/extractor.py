@@ -124,8 +124,19 @@ class Extractor:
             media_files.extend(directory.rglob(f"*{ext}"))
             media_files.extend(directory.rglob(f"*{ext.upper()}"))
         
-        logger.debug(f"Found {len(media_files)} media files in {directory}")
-        return media_files
+        # Filter out __MACOSX files and hidden files starting with ._
+        filtered_files = []
+        for file_path in media_files:
+            # Skip __MACOSX directory and its contents
+            if '__MACOSX' in str(file_path):
+                continue
+            # Skip hidden files starting with ._
+            if file_path.name.startswith('._'):
+                continue
+            filtered_files.append(file_path)
+        
+        logger.debug(f"Found {len(filtered_files)} media files in {directory} (filtered {len(media_files) - len(filtered_files)} __MACOSX/hidden files)")
+        return filtered_files
     
     def find_json_metadata(self, media_file: Path) -> Optional[Path]:
         """
