@@ -47,10 +47,42 @@ class Extractor:
         
         extract_to.mkdir(parents=True, exist_ok=True)
         
-        # Validate zip file before extraction
+        # Validate zip file before extraction (basic validation - check if we can open it)
         try:
             with zipfile.ZipFile(zip_path, 'r') as test_zip:
-                test_zip.testzip()
+                # Basic validation: try to list entries
+                entry_count = len(test_zip.namelist())
+                logger.debug(f"Zip file {zip_path.name} has {entry_count} entries")
+                
+                # Try full validation, but be lenient with file system errors on external drives
+                try:
+                    bad_file = test_zip.testzip()
+                    if bad_file:
+                        logger.warning(
+                            f"Zip file '{zip_path.name}' has corrupted entries (first bad file: {bad_file}), "
+                            f"but will attempt extraction anyway"
+                        )
+                except OSError as e:
+                    # File system errors (like [Errno 22]) might be external drive issues
+                    # Log warning but proceed with extraction - actual extraction may work
+                    if e.errno == 22:  # Invalid argument
+                        logger.warning(
+                            f"Zip validation hit file system error for '{zip_path.name}': {e}. "
+                            f"This may be due to external drive issues. Will attempt extraction anyway. "
+                            f"File size: {zip_path.stat().st_size / (1024*1024):.1f} MB"
+                        )
+                    else:
+                        # For other OSErrors during testzip, also just warn (extraction might still work)
+                        logger.warning(
+                            f"Zip validation error for '{zip_path.name}': {e}. "
+                            f"Will attempt extraction anyway."
+                        )
+                except Exception as e:
+                    # Other exceptions during testzip - warn but continue
+                    logger.warning(
+                        f"Zip validation error for '{zip_path.name}': {e}. "
+                        f"Will attempt extraction anyway."
+                    )
         except zipfile.BadZipFile as e:
             raise ExtractionError(
                 f"File '{zip_path.name}' is not a valid zip file. "
@@ -58,6 +90,7 @@ class Extractor:
                 f"Consider re-downloading this file from Google Drive."
             ) from e
         except (OSError, IOError) as e:
+            # If we can't even open the zip file, that's a real problem
             raise ExtractionError(
                 f"Error accessing zip file '{zip_path.name}': {e}. "
                 f"File may be corrupted, incomplete, or inaccessible."

@@ -10,7 +10,7 @@ The transfer direct from Google Photos to iCloud Photos that was talked about on
 
 It was such a huge task that I decided to throw it at Cursor AI and Claude to build me a tool that would do the transfer from Google Photos to Apple iCloud Photos for my family member. Along the way I realized that Apple doesn't have a public API for Photos, so you have to do this transfer on a Mac that can log into that iCloud account.  This allows it to use PhotoKit locally on the machine to do the transfer.
 
-Disk space is managed as well as it can be - I did this on a MacBook Air with 512GB hard drive.  But it really takes a long time doing it this way.  What sped it up to an acceptable experience was attaching a 2 TB SSD hard drive and moving the default Photos library to that drive.  Then it had enough room to move through things pretty quickly.
+Disk space is managed as well as it can be - I did this on a MacBook Air with 512GB hard drive.  But it really takes a long time doing it this way.  What sped it up to an acceptable experience was attaching a 2 TB SSD hard drive and moving the default Photos library to that drive.  Then it had enough room to move through things pretty quickly.  (Note you also want to locate the files for this program on that external drive also.)
 
 **Important:** This tool runs **locally on macOS only**. It requires direct access to your macOS iCloud account via PhotoKit framework. It cannot be run on virtual machines or cloud servers.
 

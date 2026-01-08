@@ -130,3 +130,4 @@ All core functionality files should be kept:
 3. Remove log files if they're tracked in git
 4. Consider adding usage notes to `process_local_folders.py`
 
+

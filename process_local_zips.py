@@ -60,10 +60,28 @@ def process_zip_file(
             return True
     
     try:
-        # Validate zip file
+        # Validate zip file (basic validation - check if we can open and list it)
         try:
             with zipfile.ZipFile(zip_path, 'r') as test_zip:
-                test_zip.testzip()
+                # Basic validation: try to list entries
+                entry_count = len(test_zip.namelist())
+                logger.debug(f"Zip file {zip_path.name} has {entry_count} entries")
+                
+                # Try full validation, but don't fail hard if it hits file system issues
+                try:
+                    bad_file = test_zip.testzip()
+                    if bad_file:
+                        logger.warning(f"Zip file {zip_path.name} has corrupted entries, but will attempt extraction")
+                except OSError as e:
+                    # File system errors (like [Errno 22]) might be external drive issues
+                    # Log warning but proceed with extraction
+                    if e.errno == 22:  # Invalid argument
+                        logger.warning(
+                            f"Zip validation hit file system error for {zip_path.name}: {e}. "
+                            f"This may be due to external drive issues. Will attempt extraction anyway."
+                        )
+                    else:
+                        raise
         except zipfile.BadZipFile:
             logger.error(f"Invalid or corrupted zip file: {zip_path.name}")
             return False

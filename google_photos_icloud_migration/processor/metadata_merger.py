@@ -273,6 +273,8 @@ class MetadataMerger:
                     elif not success:
                         logger.warning(f"Video conversion failed for {media_file.name}, copying original (will fail upload)")
                         # Copy original - upload will fail with clear error
+                    
+                    # Copy file to output directory
                     import shutil
                     output_file = output_dir / media_file.name
                     try:
@@ -282,34 +284,14 @@ class MetadataMerger:
                             output_file.chmod(0o600)
                         except (OSError, PermissionError):
                             pass  # Permission setting may fail on some systems
-                            # Set secure file permissions (owner read/write only)
-                            try:
-                                output_file.chmod(0o600)
-                            except (OSError, PermissionError):
-                                pass  # Permission setting may fail on some systems
-                            media_file = output_file
-                        except OSError as e:
-                            if e.errno == 28:  # No space left on device
-                                logger.error(f"❌ No space left on device. Cannot copy {media_file.name}")
-                                results[media_file] = False
-                                continue
-                            else:
-                                raise
-                    else:
-                        # File already converted or conversion not needed
-                        import shutil
-                        output_file = output_dir / media_file.name
-                        if not output_file.exists():
-                            try:
-                                shutil.copy2(media_file, output_file)
-                            except OSError as e:
-                                if e.errno == 28:  # No space left on device
-                                    logger.error(f"❌ No space left on device. Cannot copy {media_file.name}")
-                                    results[media_file] = False
-                                    continue
-                                else:
-                                    raise
-                        media_file = output_file if output_file.exists() else media_file
+                        media_file = output_file
+                    except OSError as e:
+                        if e.errno == 28:  # No space left on device
+                            logger.error(f"❌ No space left on device. Cannot copy {media_file.name}")
+                            results[media_file] = False
+                            continue
+                        else:
+                            raise
                 else:
                     # Copy file to output directory first (regular files or conversion disabled)
                     output_file = output_dir / media_file.name
