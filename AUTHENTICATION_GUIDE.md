@@ -4,9 +4,10 @@ This guide explains how authentication works for the Google Photos to iCloud Pho
 
 ## Overview
 
-The tool needs to authenticate with two services:
+The tool needs to authenticate with one service:
 1. **Google Drive** - To download your Google Takeout zip files
-2. **Apple/iCloud** - To upload photos to iCloud Photos (optional, depends on method)
+
+**Note:** No iCloud authentication needed! The tool uses your macOS iCloud account automatically via PhotoKit.
 
 ## Quick Start: Use the Setup Wizard
 
@@ -78,11 +79,9 @@ The `token.json` file allows the tool to access your Google Drive without asking
 
 ## Apple/iCloud Authentication
 
-### PhotoKit Method (--use-sync) - Recommended
-
 **No authentication needed!** 
 
-The PhotoKit method uses your macOS system's iCloud account automatically. It:
+The tool uses your macOS system's iCloud account automatically via PhotoKit. It:
 - Uses the Apple ID you're signed into on your Mac
 - Requires no passwords or credentials
 - Works seamlessly with iCloud Photos
@@ -98,20 +97,7 @@ The PhotoKit method uses your macOS system's iCloud account automatically. It:
 2. Enable "Photos" (or "iCloud Photos")
 3. Choose "Download Originals" or "Optimize Storage"
 
-### API Method (Alternative)
-
-The API method uses `pyicloud` library and requires:
-- Apple ID email
-- Apple ID password
-- 2FA code (if 2FA is enabled)
-
-**Limitations:**
-- Apple doesn't provide OAuth for iCloud Photos API
-- Requires password (stored in config or entered interactively)
-- May have API limitations
-- 2FA can be complex on headless systems
-
-**Recommendation:** Use PhotoKit method (`--use-sync`) instead if you're on macOS.
+**Note:** This tool requires macOS and uses PhotoKit. It cannot be run on Linux, Windows, or in virtual machines/cloud servers.
 
 ## Environment Variables (.env File)
 
@@ -126,29 +112,24 @@ For better security, you can store sensitive credentials in a `.env` file instea
 
 2. **Edit `.env` and add your credentials:**
    ```bash
-   # iCloud Configuration
-   ICLOUD_APPLE_ID=your-apple-id@example.com
-   ICLOUD_PASSWORD=your-password
-   ICLOUD_2FA_CODE=123456
-   ICLOUD_2FA_DEVICE_ID=0
-   
-   # Google Drive Configuration
+   # Google Drive Configuration (optional)
    GOOGLE_DRIVE_CREDENTIALS_FILE=credentials.json
    
-   # GitHub Token (for repository management scripts)
+   # GitHub Token (for repository management scripts, optional)
    GITHUB_TOKEN=your_github_token_here
+   
+   # Note: iCloud credentials are NOT needed!
+   # The tool uses your macOS iCloud account automatically via PhotoKit.
    ```
 
 3. **Environment variables take precedence** over `config.yaml` values, providing an extra layer of security.
 
 ### Supported Environment Variables
 
-- `ICLOUD_APPLE_ID` - Your Apple ID email
-- `ICLOUD_PASSWORD` - Your Apple ID password (for API method only)
-- `ICLOUD_2FA_CODE` - 2FA verification code
-- `ICLOUD_2FA_DEVICE_ID` - Trusted device ID for 2FA
-- `GOOGLE_DRIVE_CREDENTIALS_FILE` - Path to credentials.json
-- `GITHUB_TOKEN` - GitHub personal access token (for scripts like `scripts/set_github_repo_info.py`)
+- `GOOGLE_DRIVE_CREDENTIALS_FILE` - Path to credentials.json (optional)
+- `GITHUB_TOKEN` - GitHub personal access token (for scripts like `scripts/set_github_repo_info.py`, optional)
+
+**Note:** iCloud credentials are not needed - the tool uses your macOS iCloud account automatically via PhotoKit.
 
 **Note:** The tool automatically loads `.env` files using `python-dotenv` (already included in `requirements.txt`).
 
@@ -170,11 +151,7 @@ For better security, you can store sensitive credentials in a `.env` file instea
 - ✅ No passwords stored
 - ✅ Uses macOS security features
 
-**API Method:**
-- ⚠️ Requires Apple ID password
-- ⚠️ Password stored in `config.yaml` or `.env` (keep private)
-- ⚠️ 2FA codes may be needed
-- ✅ **Recommendation:** Use `.env` file instead of `config.yaml` for passwords
+**Note:** The tool uses PhotoKit sync method which requires no authentication. It uses your macOS iCloud account automatically.
 
 ## Troubleshooting
 
@@ -204,15 +181,10 @@ For better security, you can store sensitive credentials in a `.env` file instea
 - **Problem:** Photos not syncing to iCloud
   - **Solution:** Enable iCloud Photos in System Settings → Apple ID → iCloud
 
-**API Method:**
-- **Problem:** "2FA required"
-  - **Solution:** Enter 2FA code when prompted, or use trusted device ID
-
-- **Problem:** "Authentication failed"
-  - **Solution:** 
-    - Verify Apple ID and password
-    - Check if 2FA is enabled
-    - Try clearing cookies: `rm -rf ~/.pyicloud`
+**Note:** No authentication issues should occur with PhotoKit method as it uses your macOS iCloud account automatically. If you have issues, check:
+- You're signed into iCloud on your Mac
+- iCloud Photos is enabled in System Settings
+- Photo library write permission is granted
 
 ## Revoking Access
 
@@ -230,24 +202,21 @@ Or delete `token.json` to force re-authentication.
 
 **PhotoKit Method:** No action needed - uses system account
 
-**API Method:** 
-- Remove password from `config.yaml`
-- Delete `~/.pyicloud` directory to clear cookies
+**Note:** PhotoKit method requires no cleanup - it uses your macOS iCloud account automatically. No credentials are stored.
 
 ## Best Practices
 
 1. **Use the setup wizard** for easiest experience
-2. **Use PhotoKit method** (`--use-sync`) on macOS for best security
-3. **Use `.env` file** for sensitive credentials (GitHub token, passwords, etc.)
-4. **Keep `token.json`, `config.yaml`, and `.env` private** (don't commit to git - `.env` is already gitignored)
-5. **Revoke access** if you stop using the tool
-6. **Use separate Google Cloud project** for production use
+2. **Use `.env` file** for sensitive credentials (GitHub token, Google Drive credentials, etc.)
+3. **Keep `token.json`, `config.yaml`, and `.env` private** (don't commit to git - `.env` is already gitignored)
+4. **Revoke access** if you stop using the tool
+5. **Use separate Google Cloud project** for production use
+6. **Ensure iCloud Photos is enabled** on your Mac for automatic syncing
 
 ## Summary
 
 - **Google Drive**: OAuth 2.0, one-time setup, secure
-- **Apple/iCloud (PhotoKit)**: No auth needed, uses system account
-- **Apple/iCloud (API)**: Requires password, less secure, not recommended
+- **Apple/iCloud (PhotoKit)**: No auth needed, uses macOS iCloud account automatically, secure
 
-For the best experience, use the setup wizard and PhotoKit method!
+This tool uses PhotoKit sync method exclusively - no passwords or credentials needed for iCloud!
 

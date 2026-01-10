@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Process Google Takeout zip files from the X10 Pro drive's Takeout folder.
-This script processes local zip files: extracts, processes metadata, and uploads to iCloud.
+Process Google Takeout zip files from a local directory.
+This script processes local zip files: extracts, processes metadata, and uploads to iCloud using PhotoKit sync method (macOS only).
 """
 import argparse
 import logging
@@ -243,7 +243,7 @@ def process_zip_file(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Process Google Takeout zip files from X10 Pro drive"
+        description="Process Google Takeout zip files from a local directory"
     )
     parser.add_argument(
         "--config",
@@ -252,15 +252,12 @@ def main():
     )
     parser.add_argument(
         "--takeout-dir",
-        default="/Volumes/X10 Pro/Takeout",
         type=Path,
-        help="Directory containing takeout zip files (default: /Volumes/X10 Pro/Takeout)"
+        required=True,
+        help="Directory containing takeout zip files (e.g., /Volumes/[your external drive]/Takeout or ~/Downloads/Takeout)"
     )
-    parser.add_argument(
-        "--use-sync",
-        action="store_true",
-        help="Use PhotoKit sync method (macOS only, recommended)"
-    )
+    # PhotoKit sync method is now the only method (macOS only)
+    # No --use-sync flag needed as sync is always used
     parser.add_argument(
         "--no-cleanup",
         action="store_true",
@@ -371,13 +368,9 @@ def main():
     )
     album_parser = AlbumParser()
     
-    # Setup uploader
-    if args.use_sync:
-        logger.info("Using PhotoKit sync method (macOS)")
-        uploader = iCloudPhotosSyncUploader()
-    else:
-        logger.error("API method not fully supported. Please use --use-sync flag (macOS only)")
-        sys.exit(1)
+    # Setup uploader - always use PhotoKit sync method (macOS only)
+    logger.info("Using PhotoKit sync method (macOS)")
+    uploader = iCloudPhotosSyncUploader()
     
     # Process each zip file
     successful = 0

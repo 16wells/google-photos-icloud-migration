@@ -162,11 +162,8 @@ def main():
         type=Path,
         help="Directory containing takeout folders (default: ~/Downloads)"
     )
-    parser.add_argument(
-        "--use-sync",
-        action="store_true",
-        help="Use PhotoKit sync method (macOS only, recommended)"
-    )
+    # PhotoKit sync method is now the only method (macOS only)
+    # No --use-sync flag needed as sync is always used
     
     args = parser.parse_args()
     
@@ -216,13 +213,9 @@ def main():
     )
     album_parser = AlbumParser()
     
-    # Setup uploader
-    if args.use_sync:
-        logger.info("Using PhotoKit sync method (macOS)")
-        uploader = iCloudPhotosSyncUploader()
-    else:
-        logger.error("API method not fully supported. Please use --use-sync flag (macOS only)")
-        sys.exit(1)
+    # Setup uploader - always use PhotoKit sync method (macOS only)
+    logger.info("Using PhotoKit sync method (macOS)")
+    uploader = iCloudPhotosSyncUploader()
     
     # Process each folder
     successful = 0

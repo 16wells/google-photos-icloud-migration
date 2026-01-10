@@ -32,6 +32,16 @@ jobs:
         pip install pyobjc-framework-Photos>=10.0 || echo "Note: pyobjc-framework-Photos not available (PhotoKit tests may be skipped)"
         pip install -r requirements-dev.txt
     
+    - name: Run security audit
+      continue-on-error: true
+      run: |
+        pip-audit -r requirements.txt || echo "pip-audit check completed with warnings"
+    
+    - name: Health check
+      continue-on-error: true
+      run: |
+        python -c "from google_photos_icloud_migration.utils.health_check import HealthChecker; from pathlib import Path; checker = HealthChecker(Path('/tmp')); passed, results = checker.check_all(); checker.print_results(); exit(0 if passed else 1)" || echo "Health check completed with warnings"
+    
     - name: Run tests
       run: |
         pytest tests/ -v --cov=. --cov-report=xml --cov-report=term

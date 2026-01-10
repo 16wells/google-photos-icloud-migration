@@ -162,7 +162,7 @@ Once your OAuth credentials are set up:
 
 2. **Run the migration:**
    ```bash
-   python3 main.py --config config.yaml --use-sync
+   python3 main.py --config config.yaml
    ```
 
 ## Summary
@@ -173,6 +173,9 @@ Once your OAuth credentials are set up:
 - **Verification:** Use `verify-oauth-setup.py` to check status
 
 For more details, see [AUTHENTICATION_GUIDE.md](AUTHENTICATION_GUIDE.md).
+
+
+
 
 
 

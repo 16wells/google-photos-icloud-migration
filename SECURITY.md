@@ -10,7 +10,7 @@ If you find a security issue, please **do not** open a public issue with sensiti
 - **Google Drive**: OAuth 2.0 with scope `drive.readonly` (downloads Takeout zips).
 - **macOS Photos / iCloud Photos**:
   - Recommended method uses **PhotoKit** (writes to local Photos library; macOS sync handles iCloud).
-  - Alternative API method uses `pyicloud` (less reliable; relies on cookies/session).
+  - Uses PhotoKit framework exclusively (macOS only, no authentication needed).
 
 ## Secrets and Sensitive Files
 
@@ -31,7 +31,7 @@ This repo’s `.gitignore` is configured to ignore common secret/log files. If y
 
 - **Run on a dedicated macOS user** (or temporary user) when migrating large libraries.
 - **Use a dedicated Photos library** (optionally on external SSD) for safer rollback.
-- **Prefer PhotoKit (`--use-sync`)** to avoid storing Apple passwords in configs.
+- **PhotoKit method is the only method** - no Apple passwords stored (uses macOS iCloud account automatically).
 - **Keep tokens on disk with restrictive permissions**.
 
 ## Dependency / Supply Chain Recommendations

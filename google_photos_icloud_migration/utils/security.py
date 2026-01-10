@@ -1,185 +1,204 @@
 """
-Security utilities for input validation and path sanitization.
+Security utilities for credential storage and management.
 """
 import os
-import logging
+import sys
 from pathlib import Path
 from typing import Optional
+import logging
 
 logger = logging.getLogger(__name__)
 
-
-def validate_config_path(config_path: str, project_root: Optional[Path] = None) -> Path:
-    """
-    Validate and sanitize config path to prevent path traversal attacks.
-    
-    Args:
-        config_path: User-provided config path
-        project_root: Root directory to restrict paths to (defaults to project root)
-        
-    Returns:
-        Validated Path object
-        
-    Raises:
-        ValueError: If path is invalid or outside allowed directory
-    """
-    if not config_path:
-        raise ValueError("Config path cannot be empty")
-    
-    # Resolve to absolute path
-    resolved = Path(config_path).resolve()
-    
-    # Determine project root if not provided
-    if project_root is None:
-        # Get project root (parent of google_photos_icloud_migration package)
-        project_root = Path(__file__).parent.parent.parent.resolve()
-    
-    # Ensure path is within project directory
-    try:
-        resolved.relative_to(project_root.resolve())
-    except ValueError:
-        raise ValueError(
-            f"Config path must be within project directory. "
-            f"Got: {config_path}, resolved to: {resolved}"
-        )
-    
-    # Ensure it's a YAML file
-    if resolved.suffix not in ['.yaml', '.yml']:
-        raise ValueError(f"Config file must be a YAML file, got: {resolved.suffix}")
-    
-    return resolved
+# Try to import keyring for secure credential storage
+try:
+    import keyring
+    KEYRING_AVAILABLE = True
+except ImportError:
+    KEYRING_AVAILABLE = False
+    logger.debug("keyring library not available - using environment variables only")
 
 
-def validate_file_path(file_path: str, base_dir: Path) -> Path:
+class SecureCredentialStore:
     """
-    Validate file path is within base directory to prevent path traversal.
+    Secure credential storage using macOS Keychain (via keyring) or environment variables.
     
-    Args:
-        file_path: User-provided file path (can be relative)
-        base_dir: Base directory that file must be within
+    Prefers keyring for macOS Keychain integration, falls back to environment variables.
+    """
+    
+    SERVICE_NAME = "google-photos-icloud-migration"
+    
+    @classmethod
+    def get_credential(cls, key: str, username: Optional[str] = None) -> Optional[str]:
+        """
+        Retrieve a credential from secure storage.
         
-    Returns:
-        Validated absolute Path object
+        Args:
+            key: The credential key (e.g., 'google_drive_client_secret')
+            username: Optional username for keyring (defaults to current user)
+            
+        Returns:
+            The credential value or None if not found
+        """
+        # First check environment variables (highest priority)
+        env_key = key.upper().replace('-', '_')
+        env_value = os.getenv(env_key)
+        if env_value:
+            return env_value
         
-    Raises:
-        ValueError: If path is outside base directory
-    """
-    if not file_path:
-        raise ValueError("File path cannot be empty")
-    
-    # Resolve to absolute path
-    base_dir_resolved = base_dir.resolve()
-    resolved = (base_dir_resolved / file_path).resolve()
-    
-    # Ensure path is within base directory
-    if not str(resolved).startswith(str(base_dir_resolved)):
-        raise ValueError(
-            f"File path must be within base directory. "
-            f"Base: {base_dir_resolved}, Got: {resolved}"
-        )
-    
-    return resolved
-
-
-def is_safe_zip_path(zip_path: Path, extract_to: Path) -> bool:
-    """
-    Check if a path from a zip file is safe to extract (prevents zip slip).
-    
-    Args:
-        zip_path: Path within zip file
-        extract_to: Destination directory for extraction
+        # Then try keyring (macOS Keychain)
+        if KEYRING_AVAILABLE:
+            try:
+                username = username or os.getenv('USER', 'default')
+                credential = keyring.get_password(cls.SERVICE_NAME, f"{username}:{key}")
+                if credential:
+                    logger.debug(f"Retrieved credential '{key}' from keyring")
+                    return credential
+            except Exception as e:
+                logger.debug(f"Could not retrieve credential from keyring: {e}")
         
-    Returns:
-        True if path is safe, False otherwise
-    """
-    # Resolve both paths
-    extract_to_resolved = extract_to.resolve()
-    target_path = (extract_to_resolved / zip_path).resolve()
+        return None
     
-    # Check if target is within extract directory
-    try:
-        target_path.relative_to(extract_to_resolved)
-        return True
-    except ValueError:
+    @classmethod
+    def set_credential(cls, key: str, value: str, username: Optional[str] = None) -> bool:
+        """
+        Store a credential in secure storage.
+        
+        Args:
+            key: The credential key (e.g., 'google_drive_client_secret')
+            value: The credential value
+            username: Optional username for keyring (defaults to current user)
+            
+        Returns:
+            True if successfully stored, False otherwise
+        """
+        if not value:
+            logger.warning(f"Attempted to store empty credential for '{key}'")
+            return False
+        
+        if KEYRING_AVAILABLE:
+            try:
+                username = username or os.getenv('USER', 'default')
+                keyring.set_password(cls.SERVICE_NAME, f"{username}:{key}", value)
+                logger.debug(f"Stored credential '{key}' in keyring")
+                return True
+            except Exception as e:
+                logger.warning(f"Could not store credential in keyring: {e}")
+                return False
+        else:
+            logger.warning(
+                f"keyring not available - credential '{key}' not stored. "
+                f"Install with: pip install keyring"
+            )
+            return False
+    
+    @classmethod
+    def delete_credential(cls, key: str, username: Optional[str] = None) -> bool:
+        """
+        Delete a credential from secure storage.
+        
+        Args:
+            key: The credential key
+            username: Optional username for keyring (defaults to current user)
+            
+        Returns:
+            True if successfully deleted, False otherwise
+        """
+        if KEYRING_AVAILABLE:
+            try:
+                username = username or os.getenv('USER', 'default')
+                keyring.delete_password(cls.SERVICE_NAME, f"{username}:{key}")
+                logger.debug(f"Deleted credential '{key}' from keyring")
+                return True
+            except keyring.errors.PasswordDeleteError:
+                logger.debug(f"Credential '{key}' not found in keyring")
+                return False
+            except Exception as e:
+                logger.warning(f"Could not delete credential from keyring: {e}")
+                return False
+        
         return False
+    
+    @classmethod
+    def is_available(cls) -> bool:
+        """
+        Check if secure credential storage is available.
+        
+        Returns:
+            True if keyring is available, False otherwise
+        """
+        return KEYRING_AVAILABLE
 
 
-def sanitize_filename(filename: str) -> str:
+def sanitize_path(path: str) -> str:
     """
-    Sanitize a filename to prevent path traversal and other attacks.
+    Sanitize file paths to prevent directory traversal attacks.
     
     Args:
-        filename: Original filename
+        path: The path to sanitize
         
     Returns:
-        Sanitized filename
+        Sanitized path
     """
-    # Remove path components
-    filename = os.path.basename(filename)
+    # Resolve to absolute path to prevent traversal
+    resolved = Path(path).resolve()
     
-    # Remove dangerous characters
-    dangerous_chars = [';', '|', '&', '$', '`', '(', ')', '<', '>', '\n', '\r']
-    for char in dangerous_chars:
-        filename = filename.replace(char, '_')
+    # Check for dangerous patterns
+    path_str = str(resolved)
+    if '..' in path_str:
+        raise ValueError(f"Path contains directory traversal: {path}")
     
-    # Limit length
-    if len(filename) > 255:
-        name, ext = os.path.splitext(filename)
-        filename = name[:250] + ext
-    
-    return filename
+    return path_str
 
 
-def validate_subprocess_path(file_path: Path) -> None:
+def validate_file_path(path: str, must_exist: bool = False, must_be_file: bool = False) -> Path:
     """
-    Validate file path before passing to subprocess to prevent command injection.
-    
-    Note: When using subprocess.run() with a list of arguments (not shell=True),
-    parentheses and most characters are safe. This validation is conservative
-    but allows common filename characters like parentheses.
+    Validate a file path and return Path object.
     
     Args:
-        file_path: Path to validate
+        path: The path to validate
+        must_exist: If True, path must exist
+        must_be_file: If True, path must be a file (not directory)
+        
+    Returns:
+        Path object
         
     Raises:
-        ValueError: If path contains dangerous characters
+        ValueError: If validation fails
     """
-    path_str = str(file_path)
+    try:
+        sanitized = sanitize_path(path)
+        path_obj = Path(sanitized)
+        
+        if must_exist and not path_obj.exists():
+            raise ValueError(f"Path does not exist: {path}")
+        
+        if must_be_file and path_obj.exists() and not path_obj.is_file():
+            raise ValueError(f"Path is not a file: {path}")
+        
+        return path_obj
+    except Exception as e:
+        raise ValueError(f"Invalid file path '{path}': {e}")
+
+
+def validate_file_size(file_path: Path, max_size_mb: Optional[float] = None) -> bool:
+    """
+    Validate file size is within acceptable limits.
     
-    # Check for truly dangerous characters that could cause issues even with list args
-    # Note: Parentheses () are safe when using subprocess.run() with list arguments
-    # as Python handles them properly. Only reject characters that could cause
-    # actual problems (null bytes, newlines in paths, shell metacharacters if shell=True)
-    dangerous_chars = ['\x00', '\n', '\r']  # Null bytes and newlines are problematic
+    Args:
+        file_path: Path to file
+        max_size_mb: Maximum size in MB (None = no limit)
+        
+    Returns:
+        True if valid, False otherwise
+    """
+    if not file_path.exists():
+        return False
     
-    # Also check for characters that could be dangerous if shell=True is used
-    # (though we don't use shell=True, this is a safety measure)
-    shell_dangerous = [';', '|', '&', '$', '`', '<', '>']
+    size_bytes = file_path.stat().st_size
+    size_mb = size_bytes / (1024 * 1024)
     
-    for char in dangerous_chars:
-        if char in path_str:
-            raise ValueError(f"Invalid character in file path: {char}")
+    if max_size_mb and size_mb > max_size_mb:
+        logger.warning(f"File {file_path} is {size_mb:.1f} MB, exceeds limit of {max_size_mb:.1f} MB")
+        return False
     
-    # Warn about shell-dangerous characters but don't fail (they're safe with list args)
-    for char in shell_dangerous:
-        if char in path_str:
-            logger.warning(f"File path contains potentially problematic character '{char}': {file_path}")
-            # Don't raise - these are safe with subprocess.run(list) but log for awareness
-    
-    # Ensure path is absolute and normalized
-    if not file_path.is_absolute():
-        file_path = file_path.resolve()
-    
-    # Ensure it's a file (not directory)
-    if not file_path.is_file():
-        raise ValueError(f"Path must be a file: {file_path}")
-
-
-
-
-
-
-
-
-
-
+    return True

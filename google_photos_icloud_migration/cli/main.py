@@ -25,7 +25,7 @@ from google_photos_icloud_migration.downloader.drive_downloader import DriveDown
 from google_photos_icloud_migration.processor.extractor import Extractor
 from google_photos_icloud_migration.processor.metadata_merger import MetadataMerger
 from google_photos_icloud_migration.parser.album_parser import AlbumParser
-from google_photos_icloud_migration.uploader.icloud_uploader import iCloudUploader, iCloudPhotosSyncUploader
+from google_photos_icloud_migration.uploader.icloud_uploader import iCloudPhotosSyncUploader
 from google_photos_icloud_migration.exceptions import ConfigurationError, ExtractionError, CorruptedZipException
 from google_photos_icloud_migration.config import MigrationConfig
 from google_photos_icloud_migration.utils.logging_config import setup_logging
@@ -415,12 +415,12 @@ class MigrationOrchestrator:
         
         return albums
     
-    def setup_icloud_uploader(self, use_sync_method: bool = False):
+    def setup_icloud_uploader(self):
         """
-        Set up iCloud uploader.
+        Set up iCloud uploader using PhotoKit sync method (macOS only).
         
-        Args:
-            use_sync_method: If True, use Photos library sync method
+        This method uses Apple's PhotoKit framework to save photos directly
+        to the Photos library, which then automatically syncs to iCloud Photos.
         """
         icloud_config = self.config['icloud']
         
@@ -435,37 +435,16 @@ class MigrationOrchestrator:
             except Exception as e:
                 logger.warning(f"Could not clear upload tracking file: {e}")
         
-        # Always use tracking file (it will be empty if we just cleared it for new migration)
-        if use_sync_method:
-            # Get photos library path from config if specified
-            photos_library_path = icloud_config.get('photos_library_path')
-            if photos_library_path:
-                photos_library_path = Path(photos_library_path).expanduser()
-            self.icloud_uploader = iCloudPhotosSyncUploader(
-                photos_library_path=photos_library_path,
-                upload_tracking_file=self.upload_tracking_file
-            )
-        else:
-            password = icloud_config.get('password', '').strip() if icloud_config.get('password') else ''
-            # Prompt for password if empty
-            if not password:
-                import getpass
-                logger.info("iCloud password not set in config. Please enter your Apple ID password:")
-                logger.info("(Note: If you have 2FA enabled, use your regular password and you'll be prompted for 2FA code)")
-                password = getpass.getpass("Password: ").strip()
-            
-            # Validate Apple ID is present
-            apple_id = icloud_config.get('apple_id', '').strip()
-            if not apple_id:
-                raise ValueError("Apple ID is required in config file (icloud.apple_id)")
-            
-            self.icloud_uploader = iCloudUploader(
-                apple_id=apple_id,
-                password=password,
-                trusted_device_id=icloud_config.get('trusted_device_id'),
-                two_fa_code=icloud_config.get('two_fa_code'),  # Support 2FA code from config or env var
-                upload_tracking_file=self.upload_tracking_file
-            )
+        # Get photos library path from config if specified
+        photos_library_path = icloud_config.get('photos_library_path')
+        if photos_library_path:
+            photos_library_path = Path(photos_library_path).expanduser()
+        
+        # Always use PhotoKit sync method (macOS only)
+        self.icloud_uploader = iCloudPhotosSyncUploader(
+            photos_library_path=photos_library_path,
+            upload_tracking_file=self.upload_tracking_file
+        )
     
     def upload_to_icloud(self, media_json_pairs: Dict[Path, Optional[Path]],
                         albums: Dict[str, List[Path]]) -> Dict[Path, bool]:
@@ -502,25 +481,13 @@ class MigrationOrchestrator:
         # Upload files
         all_files = list(media_json_pairs.keys())
         
-        if isinstance(self.icloud_uploader, iCloudPhotosSyncUploader):
-            results = self.icloud_uploader.upload_files_batch(
-                all_files,
-                albums=file_to_album,
-                verify_after_upload=True,
-                on_verification_failure=verification_failure_callback
-            )
-        else:
-            # Group by album for regular uploader
-            results = {}
-            for album_name, files in albums.items():
-                logger.info(f"Uploading album: {album_name} ({len(files)} files)")
-                album_results = self.icloud_uploader.upload_photos_batch(
-                    files,
-                    album_name=album_name,
-                    verify_after_upload=True,
-                    on_verification_failure=verification_failure_callback
-                )
-                results.update(album_results)
+        # Always use PhotoKit sync method upload
+        results = self.icloud_uploader.upload_files_batch(
+            all_files,
+            albums=file_to_album,
+            verify_after_upload=True,
+            on_verification_failure=verification_failure_callback
+        )
         
         successful = sum(1 for v in results.values() if v)
         failed_count = len(results) - successful
@@ -827,12 +794,9 @@ class MigrationOrchestrator:
         except IOError as e:
             logger.error(f"Could not save corrupted zips file: {e}")
     
-    def retry_failed_uploads(self, use_sync_method: bool = False) -> Dict[Path, bool]:
+    def retry_failed_uploads(self) -> Dict[Path, bool]:
         """
-        Retry uploading files that previously failed.
-        
-        Args:
-            use_sync_method: Whether to use Photos library sync method
+        Retry uploading files that previously failed using PhotoKit sync method.
             
         Returns:
             Dictionary mapping file paths to upload success status
@@ -861,7 +825,7 @@ class MigrationOrchestrator:
         
         # Setup uploader if needed
         if self.icloud_uploader is None:
-            self.setup_icloud_uploader(use_sync_method=use_sync_method)
+            self.setup_icloud_uploader()
         
         # Group files by album
         files_by_album: Dict[str, List[Path]] = {}
@@ -893,24 +857,13 @@ class MigrationOrchestrator:
         
         all_files = [f for files in files_by_album.values() for f in files]
         
-        if isinstance(self.icloud_uploader, iCloudPhotosSyncUploader):
-            results = self.icloud_uploader.upload_files_batch(
-                all_files,
-                albums=file_to_album,
-                verify_after_upload=True,
-                on_verification_failure=verification_failure_callback
-            )
-        else:
-            # Group by album for regular uploader
-            for album_name, files in files_by_album.items():
-                logger.info(f"Retrying album: {album_name} ({len(files)} files)")
-                album_results = self.icloud_uploader.upload_photos_batch(
-                    files,
-                    album_name=album_name,
-                    verify_after_upload=True,
-                    on_verification_failure=verification_failure_callback
-                )
-                results.update(album_results)
+        # Always use PhotoKit sync method upload
+        results = self.icloud_uploader.upload_files_batch(
+            all_files,
+            albums=file_to_album,
+            verify_after_upload=True,
+            on_verification_failure=verification_failure_callback
+        )
         
         # Update failed uploads file (remove successful ones)
         successful_files = {str(path) for path, success in results.items() if success}
@@ -1075,13 +1028,10 @@ class MigrationOrchestrator:
         
         return results
     
-    def retry_failed_photos_copies(self, use_sync_method: bool = False) -> Dict[Path, bool]:
+    def retry_failed_photos_copies(self) -> Dict[Path, bool]:
         """
-        Retry copying files to Photos library that previously failed.
+        Retry copying files to Photos library that previously failed using PhotoKit sync method.
         
-        Args:
-            use_sync_method: Whether to use Photos library sync method
-            
         Returns:
             Dictionary mapping file paths to copy success status
         """
@@ -1099,7 +1049,7 @@ class MigrationOrchestrator:
         
         # Setup uploader if needed
         if self.icloud_uploader is None:
-            self.setup_icloud_uploader(use_sync_method=use_sync_method)
+            self.setup_icloud_uploader()
         
         if not isinstance(self.icloud_uploader, iCloudPhotosSyncUploader):
             logger.warning("Photos copy retry only works with sync method. Current uploader is not iCloudPhotosSyncUploader.")
@@ -1197,15 +1147,14 @@ class MigrationOrchestrator:
                 shutil.rmtree(extracted_dir)
     
     def process_single_zip(self, zip_path: Path, zip_number: int, total_zips: int, 
-                           use_sync_method: bool = False, file_info: Optional[dict] = None) -> bool:
+                           file_info: Optional[dict] = None) -> bool:
         """
-        Process a single zip file: extract, process metadata, upload, cleanup.
+        Process a single zip file using PhotoKit sync method: extract, process metadata, upload, cleanup.
         
         Args:
             zip_path: Path to zip file
             zip_number: Current zip number (for logging)
             total_zips: Total number of zip files
-            use_sync_method: Whether to use Photos library sync method
             file_info: Optional Google Drive file metadata (for tracking corrupted files)
         
         Returns:
@@ -1380,7 +1329,7 @@ class MigrationOrchestrator:
             
             # Upload files from this zip
             if self.icloud_uploader is None:
-                self.setup_icloud_uploader(use_sync_method=use_sync_method)
+                self.setup_icloud_uploader()
             
             # Build file-to-album mapping from original files
             original_file_to_album = {}
@@ -1432,61 +1381,29 @@ class MigrationOrchestrator:
             
             # Upload
             upload_results = {}
-            if isinstance(self.icloud_uploader, iCloudPhotosSyncUploader):
-                logger.info(f"Copying {len(files_to_upload)} files to Photos library...")
-                upload_results = self.icloud_uploader.upload_files_batch(
-                    files_to_upload,
-                    albums=file_to_album,
-                    verify_after_upload=True,
-                    on_verification_failure=verification_failure_callback
-                )
-            else:
-                # Group by album using file_to_album mapping
-                # Group processed files by album
-                files_by_album = {}
-                for file_path in files_to_upload:
-                    album_name = file_to_album.get(file_path, '')
-                    if album_name:
-                        if album_name not in files_by_album:
-                            files_by_album[album_name] = []
-                        files_by_album[album_name].append(file_path)
-                    else:
-                        # Files without album go to default/root
-                        if '' not in files_by_album:
-                            files_by_album[''] = []
-                        files_by_album[''].append(file_path)
-                
-                # Upload each album
-                for album_name, files in files_by_album.items():
-                    if files:
-                        display_name = album_name if album_name else '(no album)'
-                        logger.info(f"Uploading album: {display_name} ({len(files)} files)")
-                        album_results = self.icloud_uploader.upload_photos_batch(
-                            files,
-                            album_name=album_name if album_name else None,
-                            verify_after_upload=True,
-                            on_verification_failure=verification_failure_callback
-                        )
-                        upload_results.update(album_results)
+            # Always use PhotoKit sync method upload
+            logger.info(f"Copying {len(files_to_upload)} files to Photos library...")
+            upload_results = self.icloud_uploader.upload_files_batch(
+                files_to_upload,
+                albums=file_to_album,
+                verify_after_upload=True,
+                on_verification_failure=verification_failure_callback
+            )
             
             # Update state for uploaded files
             for file_path, success in upload_results.items():
                 if success:
-                    if isinstance(self.icloud_uploader, iCloudPhotosSyncUploader):
-                        # For Photos sync, mark as copied to Photos
-                        # Get asset identifier if available
-                        asset_id = None
-                        if hasattr(self.icloud_uploader, '_get_asset_identifier'):
-                            try:
-                                asset_id = self.icloud_uploader._get_asset_identifier(file_path)
-                            except Exception:
-                                pass
-                        self.state_manager.mark_file_copied_to_photos(str(file_path), zip_name, asset_id)
-                        # Also mark as synced (Photos will sync automatically)
-                        self.state_manager.mark_file_synced_to_icloud(str(file_path), zip_name)
-                    else:
-                        # For API upload, mark as synced directly
-                        self.state_manager.mark_file_synced_to_icloud(str(file_path), zip_name)
+                    # For Photos sync, mark as copied to Photos
+                    # Get asset identifier if available
+                    asset_id = None
+                    if hasattr(self.icloud_uploader, '_get_asset_identifier'):
+                        try:
+                            asset_id = self.icloud_uploader._get_asset_identifier(file_path)
+                        except Exception:
+                            pass
+                    self.state_manager.mark_file_copied_to_photos(str(file_path), zip_name, asset_id)
+                    # Also mark as synced (Photos will sync automatically)
+                    self.state_manager.mark_file_synced_to_icloud(str(file_path), zip_name)
                 else:
                     # Mark as failed upload
                     self.state_manager.mark_file_failed(
@@ -1653,18 +1570,17 @@ class MigrationOrchestrator:
         
         return sorted(existing_zips)  # Sort for consistent processing order
     
-    def run(self, use_sync_method: bool = False, retry_failed: bool = False):
+    def run(self, retry_failed: bool = False):
         """
-        Run the complete migration process.
+        Run the complete migration process using PhotoKit sync method (macOS only).
         
         Args:
-            use_sync_method: Whether to use Photos library sync method
             retry_failed: If True, only retry previously failed uploads
         """
         # If retry mode, just retry failed uploads and exit
         if retry_failed:
-            self.setup_icloud_uploader(use_sync_method=use_sync_method)
-            self.retry_failed_uploads(use_sync_method=use_sync_method)
+            self.setup_icloud_uploader()
+            self.retry_failed_uploads()
             return
         
         try:
@@ -1706,7 +1622,7 @@ class MigrationOrchestrator:
             logger.info("")
             
             # Setup iCloud uploader once (before processing zips)
-            self.setup_icloud_uploader(use_sync_method=use_sync_method)
+            self.setup_icloud_uploader()
             
             # Create mapping from file name to file_info for looking up existing zips
             file_info_by_name = {file_info['name']: file_info for file_info in zip_file_list}
@@ -1728,7 +1644,7 @@ class MigrationOrchestrator:
                     file_info = file_info_by_name.get(existing_zip.name)
                     
                     # Process this zip file
-                    process_result = self.process_single_zip(existing_zip, processed_count, total_zips, use_sync_method, file_info=file_info)
+                    process_result = self.process_single_zip(existing_zip, processed_count, total_zips, file_info=file_info)
                     
                     # Check if there are failed uploads for this zip
                     has_failed_uploads = self.failed_uploads_file.exists() and self.failed_uploads_file.stat().st_size > 0
@@ -1775,7 +1691,7 @@ class MigrationOrchestrator:
                             self._restart_requested = False
                             logger.info("Restarting migration from scratch...")
                             # Recursively call run() to restart the entire process
-                            return self.run(use_sync_method=use_sync_method, retry_failed=False)
+                            return self.run(retry_failed=False)
                         
                 except CorruptedZipException as e:
                     # Corrupted zip detected
@@ -1816,7 +1732,7 @@ class MigrationOrchestrator:
                     zip_file = self.downloader.download_single_zip(file_info, zip_dir)
                     
                     # Process this zip file (file_info is already available)
-                    process_result = self.process_single_zip(zip_file, processed_count, total_zips, use_sync_method, file_info=file_info)
+                    process_result = self.process_single_zip(zip_file, processed_count, total_zips, file_info=file_info)
                     
                     # Check if there are failed uploads for this zip
                     has_failed_uploads = self.failed_uploads_file.exists() and self.failed_uploads_file.stat().st_size > 0
@@ -1863,7 +1779,7 @@ class MigrationOrchestrator:
                             self._restart_requested = False
                             logger.info("Restarting migration from scratch...")
                             # Recursively call run() to restart the entire process
-                            return self.run(use_sync_method=use_sync_method, retry_failed=False)
+                            return self.run(retry_failed=False)
                         
                 except CorruptedZipException as e:
                     # Corrupted zip detected
@@ -1983,11 +1899,8 @@ def main():
         default='config.yaml',
         help='Path to configuration file (default: config.yaml)'
     )
-    parser.add_argument(
-        '--use-sync',
-        action='store_true',
-        help='Use Photos library sync method instead of API upload'
-    )
+    # PhotoKit sync method is now the only method (macOS only)
+    # No --use-sync flag needed as sync is always used
     parser.add_argument(
         '--retry-failed',
         action='store_true',
@@ -2006,7 +1919,7 @@ def main():
     parser.add_argument(
         '--retry-failed-photos-copies',
         action='store_true',
-        help='Retry only failed Photos library copies (requires --use-sync)'
+        help='Retry only failed Photos library copies (PhotoKit sync method only)'
     )
     
     args = parser.parse_args()
@@ -2019,12 +1932,9 @@ def main():
     elif args.retry_failed_conversions:
         orchestrator.retry_failed_conversions()
     elif args.retry_failed_photos_copies:
-        if not args.use_sync:
-            logger.error("--retry-failed-photos-copies requires --use-sync flag")
-            return
-        orchestrator.retry_failed_photos_copies(use_sync_method=True)
+        orchestrator.retry_failed_photos_copies()
     else:
-        orchestrator.run(use_sync_method=args.use_sync, retry_failed=args.retry_failed)
+        orchestrator.run(retry_failed=args.retry_failed)
 
 
 if __name__ == '__main__':

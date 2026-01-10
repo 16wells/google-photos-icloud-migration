@@ -63,7 +63,7 @@ Instead of granting permission to Terminal, grant it to Python:
 
 3. Run migration with full Python path:
    ```bash
-   /usr/bin/python3 process_local_zips.py --use-sync /path/to/zips
+   /usr/bin/python3 process_local_zips.py --takeout-dir /path/to/zips
    ```
 
 ## Solution 4: Create App Bundle (Advanced)

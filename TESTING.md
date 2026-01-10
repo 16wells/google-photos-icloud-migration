@@ -6,7 +6,7 @@ This guide explains how to test the Google Photos to iCloud migration tool befor
 
 1. Have at least one Google Takeout zip file available (can be a small test export)
 2. Set up Google Drive API credentials
-3. Configure iCloud credentials
+3. macOS with iCloud Photos enabled (no credentials needed)
 4. Have ExifTool installed
 
 ## Step 1: Create a Test Configuration
@@ -104,31 +104,18 @@ Before uploading everything, test with a small batch:
 1. Create a test upload script `test_upload.py`:
 ```python
 from pathlib import Path
-from google_photos_icloud_migration.uploader.icloud_uploader import iCloudUploader, iCloudPhotosSyncUploader
-import yaml
+from google_photos_icloud_migration.uploader.icloud_uploader import iCloudPhotosSyncUploader
 
-# Load config
-with open('config.test.yaml', 'r') as f:
-    config = yaml.safe_load(f)
-
-# Test with a few files
+# Test with a few files using PhotoKit sync method (macOS only)
 test_files = [
     Path("processed/IMG_001.jpg"),
     Path("processed/IMG_002.jpg"),
 ]
 
-# Option 1: Try API upload
-try:
-    uploader = iCloudUploader(
-        apple_id=config['icloud']['apple_id'],
-        password=config['icloud'].get('password', ''),
-        trusted_device_id=config['icloud'].get('trusted_device_id')
-    )
-    results = uploader.upload_photos_batch(test_files)
-    print(f"Upload results: {results}")
-except Exception as e:
-    print(f"API upload failed: {e}")
-    print("Try using --use-sync method instead")
+# Use PhotoKit sync method - no credentials needed
+uploader = iCloudPhotosSyncUploader()
+results = uploader.upload_files_batch(test_files)
+print(f"Upload results: {results}")
 ```
 
 2. Run:
@@ -200,10 +187,12 @@ sudo apt-get install libimage-exiftool-perl
 - Verify OAuth consent screen is configured
 - Check that Google Drive API is enabled
 
-### Issue: iCloud authentication fails
-- Verify Apple ID credentials
-- Check 2FA is working (may need to enter code interactively)
-- Try using Photos library sync method instead
+### Issue: iCloud upload fails
+- Make sure you're signed into iCloud on your Mac
+- Ensure iCloud Photos is enabled in System Settings
+- Grant photo library write permission when prompted
+- Check that you're on macOS (PhotoKit requires macOS)
+- Verify network connection for syncing to iCloud Photos
 
 ### Issue: Metadata not merging
 - Check JSON file exists and is valid
@@ -212,9 +201,10 @@ sudo apt-get install libimage-exiftool-perl
 
 ### Issue: Upload fails
 - Check iCloud storage space
-- Verify network connection
-- Try smaller batch size
-- Consider using Photos library sync method
+- Verify network connection for syncing to iCloud Photos
+- Make sure you're signed into iCloud on your Mac
+- Ensure iCloud Photos is enabled in System Settings
+- Grant photo library write permission when prompted
 
 ## Performance Testing
 
@@ -262,7 +252,7 @@ After successful testing:
 
 1. Update `config.yaml` with production settings
 2. Ensure sufficient disk space on your Mac (at least 2x your Google Photos data size)
-3. Run full migration: `python3 main.py --config config.yaml --use-sync`
+3. Run full migration: `python3 main.py --config config.yaml`
 4. Monitor progress: `tail -f migration.log`
 5. Verify results in iCloud Photos
 

@@ -251,8 +251,7 @@ This will install all required packages. Wait for installation to complete (5-10
 
 **What gets installed:**
 - `google-api-python-client` - For accessing Google Drive
-- `pyicloud` - For iCloud API access (optional, for API method)
-- `pyobjc-framework-Photos` - For PhotoKit framework (required for `--use-sync` method)
+- `pyobjc-framework-Photos` - For PhotoKit framework (required, macOS only)
 - `Pillow` - For image processing
 - `pyyaml` - For configuration files
 - `tqdm` - For progress bars
@@ -263,7 +262,7 @@ This will install all required packages. Wait for installation to complete (5-10
 Check that key packages are installed:
 
 ```bash
-python3 -c "import googleapiclient; import pyicloud; import Photos; print('All packages installed successfully!')"
+python3 -c "import googleapiclient; import Photos; print('All packages installed successfully!')"
 ```
 
 If you see "All packages installed successfully!" you're good to go. If you see errors, make sure you activated the virtual environment (step 5.2).
@@ -398,10 +397,10 @@ google_drive:
 icloud:
   apple_id: "your-apple-id@example.com"  # Your Apple ID email
   password: ""  # Leave empty - you'll be prompted when running
-  # For PhotoKit method (--use-sync), password is not needed
+  # Note: iCloud password is not needed - uses macOS iCloud account automatically via PhotoKit
 ```
 
-**Note:** For the PhotoKit sync method (`--use-sync`), you don't need to provide your Apple ID password in the config. The tool uses your macOS iCloud account automatically.
+**Note:** You don't need to provide your Apple ID password in the config. The tool uses your macOS iCloud account automatically via PhotoKit.
 
 #### Processing Configuration
 
@@ -444,10 +443,10 @@ cp .env.example .env
 ```
 
 The `.env` file supports:
-- `ICLOUD_APPLE_ID` - Your Apple ID email
-- `ICLOUD_PASSWORD` - Your Apple ID password (for API method only)
-- `ICLOUD_2FA_CODE` - 2FA verification code
-- `ICLOUD_2FA_DEVICE_ID` - Trusted device ID
+- `GOOGLE_DRIVE_CREDENTIALS_FILE` - Path to credentials.json (optional)
+- `GITHUB_TOKEN` - GitHub personal access token (for repository scripts, optional)
+
+**Note:** iCloud credentials are not needed - the tool uses your macOS iCloud account automatically via PhotoKit.
 - `GOOGLE_DRIVE_CREDENTIALS_FILE` - Path to credentials.json
 - `GITHUB_TOKEN` - GitHub personal access token (for repository management scripts)
 
@@ -514,7 +513,7 @@ You should see `(venv)` in your prompt.
 
 ### 10.2 Enable iCloud Photos (Recommended)
 
-For the PhotoKit sync method (`--use-sync`), you should enable iCloud Photos:
+You should enable iCloud Photos for automatic syncing:
 
 1. **System Settings** → **Apple ID** → **iCloud**
 2. Enable **"Photos"** (or **"iCloud Photos"**)
@@ -539,24 +538,25 @@ Run the migration using the command line:
 **Option A: Process local zip files (if you already have Google Takeout zips):**
 
 ```bash
-python3 process_local_zips.py --use-sync --takeout-dir "/path/to/your/zips"
+python3 process_local_zips.py --takeout-dir "/path/to/your/zips"
 ```
 
 **Option B: Download from Google Drive and process:**
 
 ```bash
-python3 main.py --config config.yaml --use-sync
+python3 main.py --config config.yaml
 ```
 
 Both methods use the recommended PhotoKit method (preserves metadata, supports albums).
 
-**Why PhotoKit Method?**
+**Why This Method?**
 - ✅ **Native Photos App Integration**: Uses macOS Photos app with built-in iCloud Photos sync
 - ✅ **Full Album Support**: Complete album organization via PhotoKit framework
-- ✅ **No API Limitations**: Uses Apple's native PhotoKit instead of reverse-engineered APIs
+- ✅ **No API Limitations**: Uses Apple's native PhotoKit framework
 - ✅ **Automatic Sync**: Photos automatically sync to iCloud Photos once saved
 - ✅ **Metadata Preservation**: Preserves all EXIF metadata (GPS, dates, camera info)
 - ✅ **Better Reliability**: Uses Apple's official PhotoKit framework
+- ✅ **No Authentication Needed**: Uses your macOS iCloud account automatically
 - ✅ **No Authentication Needed**: Uses your macOS iCloud account automatically
 
 ### 10.5 First Run - Google Drive Authentication
@@ -626,7 +626,7 @@ Once you've validated the iCloud account:
 3. **Run the migration**:
    ```bash
    source venv/bin/activate
-   python3 main.py --config config.yaml --use-sync
+   python3 main.py --config config.yaml
    ```
 
 ## Optional: Using a Separate User Account
@@ -696,7 +696,7 @@ The PhotoKit sync method:
 
 If albums aren't being created:
 - Check Photos app permissions (System Settings → Privacy & Security → Photos)
-- Verify you're using `--use-sync` flag
+- Verify you're on macOS (PhotoKit requires macOS)
 - Check logs for album-related errors
 
 ### Out of Disk Space
@@ -740,10 +740,10 @@ After your first successful migration:
 source venv/bin/activate
 
 # Run migration with Command Line (PhotoKit method - recommended)
-python3 main.py --config config.yaml --use-sync
+python3 main.py --config config.yaml
 
 # Retry failed uploads
-python3 main.py --config config.yaml --retry-failed --use-sync
+python3 main.py --config config.yaml --retry-failed
 
 # Check what's installed
 python3 --version

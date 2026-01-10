@@ -44,13 +44,13 @@
         },
         "photos_library_path": {
           "type": ["string", "null"],
-          "description": "Path to Photos library (optional, for --use-sync method)"
+          "description": "Path to Photos library (optional, for PhotoKit sync method)"
         },
         "method": {
           "type": "string",
-          "enum": ["api", "photokit"],
+          "enum": ["photokit"],
           "default": "photokit",
-          "description": "Upload method: 'api' or 'photokit'"
+          "description": "Upload method: 'photokit' (PhotoKit sync method - macOS only)"
         }
       },
       "additionalProperties": false

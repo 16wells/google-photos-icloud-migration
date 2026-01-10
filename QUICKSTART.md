@@ -7,7 +7,7 @@ Get started with the Google Photos to iCloud migration in 5 minutes.
 - [ ] Python 3.11+ installed
 - [ ] ExifTool installed (`brew install exiftool` on macOS)
 - [ ] Google Drive API credentials (`credentials.json`)
-- [ ] Apple ID credentials
+- [ ] macOS with iCloud Photos enabled (no credentials needed)
 - [ ] Google Takeout zip files in Google Drive
 
 ## Setup (5 minutes)
@@ -33,12 +33,12 @@ cp config.yaml.example config.yaml
 
    **Option A: Process local zip files (if you already have Google Takeout zips):**
    ```bash
-   python3 process_local_zips.py --use-sync --takeout-dir "/path/to/your/zips"
+   python3 process_local_zips.py --takeout-dir "/path/to/your/zips"
    ```
    
    **Option B: Download from Google Drive and process:**
    ```bash
-   python3 main.py --config config.yaml --use-sync
+   python3 main.py --config config.yaml
    ```
    
    Both methods use Apple's PhotoKit framework to save photos directly to your Photos library, which then syncs to iCloud Photos automatically.
@@ -53,17 +53,19 @@ google_drive:
   zip_file_pattern: "takeout-*.zip"
 
 icloud:
-  apple_id: "your-email@example.com"
-  password: ""  # Leave empty to be prompted
+  # No credentials needed - uses your macOS iCloud account automatically via PhotoKit
+  # Optional: Specify a custom Photos library path if needed
+  # photos_library_path: "~/Pictures/Photos Library.photoslibrary"
 
 processing:
   base_dir: "/tmp/google-photos-migration"
 ```
 
-**Optional:** For better security, store sensitive credentials (passwords, API tokens) in a `.env` file:
+**Optional:** For better security, store Google Drive credentials in a `.env` file:
 ```bash
 cp .env.example .env
-# Edit .env and add your credentials
+# Edit .env and add your Google Drive credentials
+# Note: iCloud credentials not needed - uses macOS iCloud account automatically
 ```
 Environment variables in `.env` take precedence over `config.yaml`. See [AUTHENTICATION_GUIDE.md](AUTHENTICATION_GUIDE.md) for details.
 
@@ -90,7 +92,11 @@ Environment variables in `.env` take precedence over `config.yaml`. See [AUTHENT
 - **Solution**: Check credentials.json path and OAuth setup
 
 **Problem**: "iCloud upload not working"
-- **Solution**: Try `--use-sync` flag (macOS only)
+- **Solution**: 
+  - Make sure you're signed into iCloud on your Mac
+  - Ensure iCloud Photos is enabled in System Settings
+  - Grant photo library write permission when prompted
+  - Check that you're on macOS (PhotoKit requires macOS)
 
 **Problem**: "Out of disk space"
 - **Solution**: Process in smaller batches, enable cleanup

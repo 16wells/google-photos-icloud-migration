@@ -41,7 +41,7 @@ Quick checklist for preparing the new MacBook today.
 
 - [ ] **Sign into iCloud**
   - System Settings → Apple ID
-  - Sign in with `katie@shean.com`
+  - Sign in with your Apple ID
 
 - [ ] **Enable iCloud Photos**
   - System Settings → Apple ID → iCloud → Photos
@@ -55,7 +55,7 @@ Quick checklist for preparing the new MacBook today.
 - [ ] **Run migration**
   ```bash
   cd ~/google-photos-icloud-migration
-  python3 main.py --config config.yaml --use-sync
+  python3 main.py --config config.yaml
   ```
 
 ## Files to Copy

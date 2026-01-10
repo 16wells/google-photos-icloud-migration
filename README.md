@@ -8,7 +8,7 @@ I have a legacy free Google Workspace account for my family's use.  These accoun
 
 The transfer direct from Google Photos to iCloud Photos that was talked about on the web when I was doing this was not available in these old free Google Workspace accounts, so I had to come up with something.
 
-It was such a huge task that I decided to throw it at Cursor AI and Claude to build me a tool that would do the transfer from Google Photos to Apple iCloud Photos for my family member. Along the way I realized that Apple doesn't have a public API for Photos, so you have to do this transfer on a Mac that can log into that iCloud account.  This allows it to use PhotoKit locally on the machine to do the transfer.
+It was such a huge task that I decided to throw it at Cursor to build me a tool that would do the transfer from Google Photos to Apple iCloud Photos for my family member. Along the way I realized that Apple doesn't have a public API for Photos, so you have to do this transfer on a Mac that can log into that iCloud account.  This allows it to use PhotoKit locally on the machine to do the transfer.
 
 Disk space is managed as well as it can be - I did this on a MacBook Air with 512GB hard drive.  But it really takes a long time doing it this way.  What sped it up to an acceptable experience was attaching a 2 TB SSD hard drive and moving the default Photos library to that drive.  Then it had enough room to move through things pretty quickly.  (Note you also want to locate the files for this program on that external drive also.)
 
@@ -75,7 +75,7 @@ cp config.yaml.example config.yaml
 Edit `config.yaml` with your settings:
 
 - **Google Drive**: Credentials file path, folder ID (optional), zip file pattern
-- **iCloud**: Apple ID, password (optional - will prompt), trusted device ID for 2FA
+- **iCloud**: No credentials needed - uses your macOS iCloud account automatically (PhotoKit sync method)
 - **Processing**: Base directory, batch sizes, cleanup options
 - **Metadata**: Options for preserving dates, GPS, descriptions, albums
 
@@ -89,9 +89,10 @@ cp .env.example .env
 ```
 
 The `.env` file supports:
-- `ICLOUD_APPLE_ID`, `ICLOUD_PASSWORD`, `ICLOUD_2FA_CODE`, `ICLOUD_2FA_DEVICE_ID`
 - `GOOGLE_DRIVE_CREDENTIALS_FILE`
 - `GITHUB_TOKEN` (for repository management scripts)
+
+**Note:** iCloud credentials are not needed as the tool uses your macOS iCloud account automatically via PhotoKit.
 
 Environment variables take precedence over `config.yaml` values. See [AUTHENTICATION_GUIDE.md](AUTHENTICATION_GUIDE.md) for details.
 
@@ -102,7 +103,7 @@ Environment variables take precedence over `config.yaml` values. See [AUTHENTICA
 If you already have Google Takeout zip files downloaded locally, use `process_local_zips.py`:
 
 ```bash
-python3 process_local_zips.py --use-sync --takeout-dir "/path/to/your/zips"
+python3 process_local_zips.py --takeout-dir "/path/to/your/zips"
 ```
 
 **Key features:**
@@ -114,10 +115,10 @@ python3 process_local_zips.py --use-sync --takeout-dir "/path/to/your/zips"
 **Example:**
 ```bash
 # Process all zips, skipping already-processed ones
-python3 process_local_zips.py --use-sync --skip-processed --retry-failed
+python3 process_local_zips.py --skip-processed --retry-failed
 
 # Process specific directory
-python3 process_local_zips.py --use-sync --takeout-dir "/Volumes/X10 Pro/Takeout"
+python3 process_local_zips.py --takeout-dir "/Volumes/[your external drive]/Takeout"
 ```
 
 ### Downloading from Google Drive
@@ -125,7 +126,7 @@ python3 process_local_zips.py --use-sync --takeout-dir "/Volumes/X10 Pro/Takeout
 If you need to download zip files from Google Drive first, use `main.py`:
 
 ```bash
-python3 main.py --config config.yaml --use-sync
+python3 main.py --config config.yaml
 ```
 
 This method:
@@ -133,34 +134,24 @@ This method:
 2. Extracts and processes them
 3. Uploads to iCloud Photos
 
-### Using Photos Library Sync Method (Recommended)
+### PhotoKit Sync Method (macOS Only)
 
-For the most reliable uploads with full EXIF metadata preservation, use the PhotoKit-based sync method (macOS only):
-
-```bash
-# For local zip processing
-python3 process_local_zips.py --use-sync
-
-# For Google Drive download
-python3 main.py --config config.yaml --use-sync
-```
-
-This method uses Apple's PhotoKit framework to save photos directly to your Photos library, which then automatically syncs to iCloud Photos. This approach:
+This tool uses Apple's PhotoKit framework to save photos directly to your Photos library, which then automatically syncs to iCloud Photos. This approach:
 - Preserves all EXIF metadata (GPS, dates, camera info)
 - Supports album organization
-- Is more reliable than API-based methods
 - Requires macOS and photo library write permission
+- No authentication needed - uses your macOS iCloud account automatically
 
 ### Retrying Failed Uploads
 
 **For local zip processing:**
 ```bash
-python3 process_local_zips.py --use-sync --retry-failed
+python3 process_local_zips.py --retry-failed
 ```
 
 **For Google Drive processing:**
 ```bash
-python3 main.py --config config.yaml --retry-failed --use-sync
+python3 main.py --config config.yaml --retry-failed
 ```
 
 Failed uploads are automatically tracked and can be retried without re-processing the entire zip file.
@@ -181,7 +172,7 @@ Failed uploads are automatically tracked and can be retried without re-processin
 2. **Extract**: Extracts zip files maintaining directory structure
 3. **Process Metadata**: Merges JSON metadata into media files using ExifTool
 4. **Parse Albums**: Extracts album structure from directory hierarchy and JSON metadata
-5. **Upload**: Uploads processed files to iCloud Photos
+5. **Upload**: Uploads processed files to iCloud Photos using PhotoKit (macOS only)
 6. **Cleanup**: Removes temporary files (if configured)
 
 ## Metadata Preservation
@@ -192,22 +183,20 @@ The tool preserves:
 - **Descriptions**: Captions and descriptions from JSON metadata
 - **Album Structure**: Album organization from directory structure and JSON
 
-## iCloud Photos Upload Methods
+## iCloud Photos Upload Method
 
-### Method 1: API Upload (Default)
-Uses `pyicloud` library to attempt direct upload. **Note:** Apple doesn't provide a public REST API for iCloud Photos, so this method has significant limitations and may not work reliably.
-
-### Method 2: PhotoKit Library Sync (macOS - Recommended)
-Uses Apple's PhotoKit framework (via `pyobjc-framework-Photos`) to save photos directly to the Photos library using `PHPhotoLibrary` and `PHAssetChangeRequest`. Photos then automatically syncs to iCloud Photos if iCloud Photos is enabled. This method:
+This tool uses Apple's PhotoKit framework (via `pyobjc-framework-Photos`) to save photos directly to the Photos library using `PHPhotoLibrary` and `PHAssetChangeRequest`. Photos then automatically syncs to iCloud Photos if iCloud Photos is enabled. This method:
 - **Preserves EXIF metadata** by using file URLs instead of image objects
 - **Supports albums** via PhotoKit's album management
 - **Requires macOS** and photo library write permission
 - **Automatically syncs** to iCloud Photos when enabled in System Settings
+- **No authentication needed** - uses your macOS iCloud account automatically
 
 **Prerequisites:**
 - macOS (required for PhotoKit)
 - `pyobjc-framework-Photos` package (installed via requirements.txt)
 - Photo library write permission (granted on first use)
+- iCloud Photos enabled in System Settings
 
 ## Authentication
 
@@ -220,8 +209,9 @@ python3 auth_setup.py
 
 This will guide you through:
 - Google Drive OAuth setup (opens browser automatically)
-- Apple/iCloud configuration (no auth needed for PhotoKit method)
 - Creating your `config.yaml` file
+
+**Note:** No iCloud authentication is needed - the tool uses your macOS iCloud account automatically via PhotoKit.
 
 ## Troubleshooting
 
@@ -230,14 +220,11 @@ Install ExifTool:
 - macOS: `brew install exiftool`
 - Linux: `apt-get install libimage-exiftool-perl` or `yum install perl-Image-ExifTool`
 
-### 2FA Authentication Issues (API method only)
-- **Note**: The PhotoKit sync method (`--use-sync`) doesn't require authentication - it uses your macOS iCloud account automatically
-- **For API method**: 
-  - Check status: Run `python3 check-auth-status.py` to see authentication status
-  - Use environment variables: `ICLOUD_2FA_DEVICE_ID` and `ICLOUD_2FA_CODE`
-  - Or use trusted device ID in config.yaml and run interactively
+### iCloud Authentication
+- **Note**: The PhotoKit sync method doesn't require authentication - it uses your macOS iCloud account automatically
+- Make sure you're signed into iCloud on your Mac and iCloud Photos is enabled in System Settings
 
-### PhotoKit Permission Issues (--use-sync method)
+### PhotoKit Permission Issues
 - If you see "Photo library write permission denied":
   - Grant permission in **System Settings > Privacy & Security > Photos**
   - Ensure the app has "Add Photos Only" or "Read and Write" permission
@@ -246,7 +233,7 @@ Install ExifTool:
   - Install it: `pip install pyobjc-framework-Photos`
   - Or reinstall all dependencies: `pip install -r requirements.txt`
 - If you're not on macOS:
-  - PhotoKit method requires macOS. Use the API method instead (without `--use-sync`)
+  - This tool requires macOS for PhotoKit framework. It cannot run on Linux, Windows, or in virtual machines/cloud servers.
 
 ### Upload Failures
 - Failed uploads are automatically saved to `failed_uploads.json` in the base directory
@@ -260,9 +247,9 @@ Install ExifTool:
   - Update the failed uploads file (removing successful ones)
   - Show progress and final results
 - If uploads continue to fail:
-  - Try using `--use-sync` flag for PhotoKit sync method (macOS only, recommended)
   - Check iCloud storage space
-  - Verify Apple ID credentials (for API method)
+  - Verify you're signed into iCloud on your Mac
+  - Ensure iCloud Photos is enabled in System Settings
   - Check network connectivity
   - Review error messages in the log file
 
@@ -273,11 +260,10 @@ Install ExifTool:
 
 ## Limitations
 
-- **Album Creation**: PhotoKit supports album creation, but it requires proper permissions. Albums are created automatically when using the `--use-sync` method.
-- **Upload Method**: Direct API uploads via `pyicloud` may not be fully supported as Apple doesn't provide a public REST API. The PhotoKit sync method (`--use-sync`) is recommended for reliability and metadata preservation.
-- **Platform**: PhotoKit sync method requires macOS. API method can be used on other platforms but has limitations.
-- **2FA**: Requires interactive input or trusted device configuration for API method.
-- **Permissions**: PhotoKit method requires photo library write permission, which is requested automatically on first use.
+- **Platform**: Requires macOS (PhotoKit framework is macOS-only)
+- **Permissions**: Requires photo library write permission, which is requested automatically on first use
+- **iCloud Photos**: Requires iCloud Photos to be enabled in System Settings for automatic syncing
+- **Album Creation**: Albums are created automatically via PhotoKit
 
 ## System Requirements
 
@@ -302,6 +288,8 @@ For issues or questions:
 - **[COMPLETE_INSTALLATION_GUIDE.md](COMPLETE_INSTALLATION_GUIDE.md)** - Step-by-step setup on a new MacBook
 - **[AUTHENTICATION_GUIDE.md](AUTHENTICATION_GUIDE.md)** - Detailed authentication setup guide
 - **[TESTING.md](TESTING.md)** - Test the migration before running the full process
+- **[DEVELOPMENT.md](DEVELOPMENT.md)** - Development guide (testing, linting, documentation)
+- **[docs/](docs/)** - Sphinx API documentation (run `make docs` to generate)
 
 ## Notes
 

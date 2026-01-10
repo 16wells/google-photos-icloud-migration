@@ -55,6 +55,14 @@ processed/
 # Uncomment the line below if you want to ignore the entire .cursor directory
 # .cursor/
 
+# Documentation build
+docs/_build/
+docs/_static/.DS_Store
+
+# Dependency lock files (optional - can commit for reproducible builds)
+# requirements.lock.txt
+# requirements-dev.lock.txt
+
 # OS
 .DS_Store
 Thumbs.db
