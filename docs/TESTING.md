@@ -36,7 +36,7 @@ cp config.yaml config.test.yaml
 3. Update `config.test.yaml` with the folder ID or pattern
 4. Run:
 ```bash
-python3 main.py --config config.test.yaml
+python3 scripts/main.py --config config.test.yaml
 ```
 
 ### Option B: Test with Local Zip File
@@ -252,7 +252,7 @@ After successful testing:
 
 1. Update `config.yaml` with production settings
 2. Ensure sufficient disk space on your Mac (at least 2x your Google Photos data size)
-3. Run full migration: `python3 main.py --config config.yaml`
+3. Run full migration: `python3 scripts/main.py --config config.yaml`
 4. Monitor progress: `tail -f migration.log`
 5. Verify results in iCloud Photos
 

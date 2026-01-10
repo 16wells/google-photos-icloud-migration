@@ -145,7 +145,7 @@ def main():
     print("3. If not listed:")
     print("   - Click the '+' button to add it (if available)")
     print("   - Or run: sudo tccutil reset Photos")
-    print("   - Then run: python3 request_photos_permission.py")
+    print("   - Then run: python3 scripts/request_photos_permission.py")
     print("4. Enable 'Add Photos Only' or 'Read and Write' permission")
     print()
     print("Alternative: If {terminal_app} doesn't appear, try:")

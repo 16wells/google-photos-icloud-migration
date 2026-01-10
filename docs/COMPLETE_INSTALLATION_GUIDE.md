@@ -278,7 +278,7 @@ The tool needs to authenticate with Google Drive to access your Takeout zip file
 The easiest way is to use the built-in authentication wizard:
 
 ```bash
-python3 auth_setup.py
+python3 scripts/auth_setup.py
 ```
 
 This wizard will:
@@ -538,13 +538,13 @@ Run the migration using the command line:
 **Option A: Process local zip files (if you already have Google Takeout zips):**
 
 ```bash
-python3 process_local_zips.py --takeout-dir "/path/to/your/zips"
+python3 scripts/process_local_zips.py --takeout-dir "/path/to/your/zips"
 ```
 
 **Option B: Download from Google Drive and process:**
 
 ```bash
-python3 main.py --config config.yaml
+python3 scripts/main.py --config config.yaml
 ```
 
 Both methods use the recommended PhotoKit method (preserves metadata, supports albums).
@@ -606,7 +606,7 @@ If you want to prepare the MacBook today but run the migration tomorrow (e.g., a
 2. **Copy configuration files** (`credentials.json` and `config.yaml`) to the MacBook
 3. **Run verification** to ensure everything is ready:
    ```bash
-   python3 verify-setup.py
+   python3 scripts/verify-setup.py
    ```
    All checks should pass ✓
 
@@ -626,7 +626,7 @@ Once you've validated the iCloud account:
 3. **Run the migration**:
    ```bash
    source venv/bin/activate
-   python3 main.py --config config.yaml
+   python3 scripts/main.py --config config.yaml
    ```
 
 ## Optional: Using a Separate User Account
@@ -670,7 +670,7 @@ For isolation and to prevent conflicts, you can create a separate macOS user acc
 - Make sure `credentials.json` is in the tool directory
 - Verify the file is valid JSON: `python3 -c "import json; json.load(open('credentials.json'))"`
 - Re-download credentials from Google Cloud Console if needed
-- Run `python3 verify-oauth-setup.py` to diagnose OAuth issues
+- Run `python3 scripts/verify-oauth-setup.py` to diagnose OAuth issues
 
 ### PhotoKit Permission Issues
 
@@ -714,10 +714,10 @@ If albums aren't being created:
 
 ### Need More Help?
 
-1. Check the main [README.md](README.md) for more details
-2. See [README.md](README.md) for detailed documentation
+1. Check the main [README.md](../README.md) for more details
+2. See [README.md](../README.md) for detailed documentation
 3. Review logs in `migration.log` file
-4. Check the [Troubleshooting section](README.md#troubleshooting) in README
+4. Check the [Troubleshooting section](../README.md#troubleshooting) in README
 
 ---
 
@@ -740,10 +740,10 @@ After your first successful migration:
 source venv/bin/activate
 
 # Run migration with Command Line (PhotoKit method - recommended)
-python3 main.py --config config.yaml
+python3 scripts/main.py --config config.yaml
 
 # Retry failed uploads
-python3 main.py --config config.yaml --retry-failed
+python3 scripts/main.py --config config.yaml --retry-failed
 
 # Check what's installed
 python3 --version

@@ -25,7 +25,17 @@ SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
 
 
 class DriveDownloader:
-    """Handles downloading files from Google Drive."""
+    """
+    Handles downloading files from Google Drive using the Google Drive API.
+    
+    This class manages Google Drive API authentication, file listing, and downloading
+    with support for:
+    - OAuth 2.0 authentication with token caching
+    - Retry logic for transient API errors
+    - Disk space checking before downloads
+    - Progress tracking for large file downloads
+    - Secure token storage with restricted file permissions
+    """
 
     def _get_token_file_path(self) -> Path:
         """
@@ -47,17 +57,43 @@ class DriveDownloader:
     
     def __init__(self, credentials_file: str):
         """
-        Initialize the Drive downloader.
+        Initialize the Drive downloader with Google Drive API credentials.
+        
+        This method initializes the downloader, validates the credentials file,
+        and performs OAuth 2.0 authentication. The authentication token is cached
+        in a secure location for future use.
         
         Args:
-            credentials_file: Path to Google Drive API credentials JSON file
+            credentials_file: Path to Google Drive API credentials JSON file.
+                           This file should be downloaded from the Google Cloud Console
+                           at https://console.cloud.google.com/apis/credentials
+        
+        Raises:
+            AuthenticationError: If authentication fails or credentials are invalid
+            FileNotFoundError: If the credentials file does not exist
+        
+        Note:
+            Authentication tokens are stored securely with restricted permissions (0600).
+            The token location follows XDG config directory standards when possible.
         """
         self.credentials_file = credentials_file
         self.service = None
         self._authenticate()
     
-    def _authenticate(self):
-        """Authenticate with Google Drive API."""
+    def _authenticate(self) -> None:
+        """
+        Authenticate with Google Drive API using OAuth 2.0.
+        
+        This method handles the OAuth 2.0 authentication flow, including:
+        - Loading existing tokens from cache
+        - Refreshing expired tokens automatically
+        - Interactive authorization for new users
+        - Headless mode support for server environments
+        - Secure token storage with restricted permissions
+        
+        Raises:
+            AuthenticationError: If authentication fails or credentials are invalid
+        """
         creds = None
         token_file = self._get_token_file_path()
         
@@ -160,14 +196,35 @@ class DriveDownloader:
     def list_zip_files(self, folder_id: Optional[str] = None, 
                        pattern: Optional[str] = None) -> List[dict]:
         """
-        List zip files in Google Drive.
+        List zip files in Google Drive with optional filtering.
+        
+        This method queries the Google Drive API to find all zip files, with support
+        for folder-specific searches and filename pattern matching. Includes automatic
+        pagination handling for accounts with many files.
         
         Args:
-            folder_id: Optional folder ID to search in
-            pattern: Optional file name pattern (e.g., "takeout-*.zip")
+            folder_id: Optional Google Drive folder ID to search within.
+                     If specified, only searches for files in that folder.
+                     If None, searches all accessible files (default).
+            pattern: Optional filename pattern for filtering (e.g., "takeout-*.zip").
+                   Uses fnmatch-style pattern matching (case-insensitive).
+                   If None, returns all zip files found (default).
         
         Returns:
-            List of file metadata dictionaries
+            List of file metadata dictionaries, each containing:
+            - 'id': Google Drive file ID
+            - 'name': File name
+            - 'size': File size in bytes (as string)
+            - 'modifiedTime': Last modified timestamp (if available)
+        
+        Raises:
+            AuthenticationError: If API authentication fails (HTTP 401)
+            DownloadError: If API request fails with non-retryable error (HTTP 4xx/5xx)
+        
+        Note:
+            Automatically handles pagination for accounts with more than 1000 files.
+            Includes retry logic with exponential backoff for transient server errors.
+            Pattern matching is case-insensitive and supports wildcards (* and ?).
         """
         import time
         from googleapiclient.errors import HttpError
@@ -290,16 +347,37 @@ class DriveDownloader:
     def download_file(self, file_id: str, file_name: str, 
                      destination_dir: Path, file_size: Optional[int] = None) -> Path:
         """
-        Download a file from Google Drive.
+        Download a file from Google Drive with retry logic and progress tracking.
+        
+        This method downloads a file from Google Drive with comprehensive error handling:
+        - Disk space checking before download starts
+        - Retry logic with exponential backoff for transient errors
+        - Progress logging for large files
+        - Automatic cleanup of partial files on failure
+        - Secure file handling with proper permissions
         
         Args:
-            file_id: Google Drive file ID
-            file_name: Name of the file
-            destination_dir: Directory to save the file
-            file_size: Optional file size in bytes (for disk space checking)
+            file_id: Google Drive file ID (from list_zip_files() or API)
+            file_name: Name for the downloaded file (can differ from Drive name)
+            destination_dir: Directory to save the downloaded file.
+                          Directory is created if it doesn't exist.
+            file_size: Optional file size in bytes for disk space checking.
+                     If provided, checks available disk space before downloading.
+                     If None, skips disk space check (not recommended for large files).
         
         Returns:
-            Path to downloaded file
+            Path object pointing to the downloaded file.
+            File permissions are set to 0600 (owner read/write only) for security.
+        
+        Raises:
+            DownloadError: If download fails after all retries or due to I/O errors
+            OSError: If disk space is insufficient or file operations fail
+        
+        Note:
+            If a file with the same name already exists in destination_dir, the download
+            is skipped and the existing file path is returned.
+            Uses MediaIoBaseDownload for efficient streaming of large files.
+            Includes automatic retry with exponential backoff for HTTP 5xx errors.
         """
         destination_dir.mkdir(parents=True, exist_ok=True)
         destination_path = destination_dir / file_name
@@ -369,15 +447,33 @@ class DriveDownloader:
                          folder_id: Optional[str] = None,
                          pattern: Optional[str] = None) -> List[Path]:
         """
-        Download all zip files matching criteria.
+        Download all zip files matching the specified criteria.
+        
+        This method lists and downloads all zip files from Google Drive that match
+        the provided folder ID and/or filename pattern. Downloads are performed
+        sequentially with comprehensive error handling.
         
         Args:
-            destination_dir: Directory to save zip files
-            folder_id: Optional folder ID to search in
-            pattern: Optional file name pattern
+            destination_dir: Directory to save downloaded zip files.
+                           Directory is created if it doesn't exist.
+            folder_id: Optional Google Drive folder ID to search within.
+                     If specified, only downloads files from that folder.
+                     If None, searches all accessible files (default).
+            pattern: Optional filename pattern for filtering (e.g., "takeout-*.zip").
+                   Uses fnmatch-style pattern matching (case-insensitive).
+                   If None, downloads all zip files found (default).
         
         Returns:
-            List of paths to downloaded files
+            List of Path objects pointing to successfully downloaded files.
+            Only files that were successfully downloaded are included in the result.
+            Files that already exist are included (not re-downloaded).
+        
+        Note:
+            Downloads are performed sequentially (one at a time) to avoid overwhelming
+            the Google Drive API with concurrent requests.
+            For parallel downloads, consider using the parallel processing utilities
+            in combination with download_file() directly.
+            Each downloaded file is validated for size and permissions.
         """
         files = self.list_zip_files(folder_id=folder_id, pattern=pattern)
         downloaded_files = []

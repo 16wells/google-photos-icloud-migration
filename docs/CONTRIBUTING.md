@@ -160,15 +160,19 @@ make clean         # Clean temporary files
 
 ```
 .
-├── main.py                 # Main entry point
-├── drive_downloader.py     # Google Drive integration
-├── extractor.py            # Zip extraction
-├── metadata_merger.py      # Metadata processing
-├── album_parser.py         # Album parsing
-├── icloud_uploader.py      # iCloud upload
-├── exceptions.py           # Custom exceptions
+├── scripts/                 # All user-facing and utility scripts
+│   ├── main.py            # Main entry point (downloads from Google Drive)
+│   ├── process_local_zips.py  # Process local zip files
+│   ├── auth_setup.py      # Authentication setup wizard
+│   └── ...                # Other utility scripts
+├── google_photos_icloud_migration/  # Main package
+│   ├── downloader/        # Google Drive integration
+│   ├── processor/         # Extraction and metadata processing
+│   ├── parser/            # Album parsing
+│   ├── uploader/          # iCloud upload (PhotoKit)
+│   └── utils/             # Utilities (retry, security, etc.)
 ├── tests/                  # Test files
-├── docs/                   # Documentation
+├── docs/                   # Documentation (markdown + Sphinx)
 └── requirements.txt        # Production dependencies
 ```
 
@@ -213,7 +217,7 @@ If you discover a security vulnerability:
 
 ## Documentation
 
-- Update README.md for user-facing changes
+- Update [README.md](../README.md) for user-facing changes
 - Update docstrings for API changes
 - Add examples for new features
 - Keep documentation clear and concise

@@ -1,12 +1,16 @@
 """
 State management for migration process tracking and resumption.
+
+This module handles state persistence for the migration process, allowing
+for resumability and progress tracking. State is stored in JSON files with
+comprehensive error handling and validation.
 """
 import json
 import logging
 import time
 import hashlib
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 from datetime import datetime
 from enum import Enum
 
@@ -40,14 +44,38 @@ class ZipProcessingState(Enum):
 
 
 class StateManager:
-    """Manages state tracking for migration process."""
+    """
+    Manages state tracking for migration process with JSON-based persistence.
+    
+    This class provides comprehensive state management for:
+    - Zip file processing states (downloaded, extracted, uploaded, failed)
+    - Individual file processing states (extracted, converted, uploaded, failed)
+    - Checkpoint management for resumable operations
+    - State persistence with automatic loading and saving
+    - State validation and error recovery
+    
+    State files are stored as JSON in the base directory:
+    - zip_processing_state.json: Tracks zip file processing progress
+    - file_processing_state.json: Tracks individual file processing progress
+    - checkpoint.json: Stores checkpoint information for resumability
+    """
     
     def __init__(self, base_dir: Path):
         """
-        Initialize state manager.
+        Initialize state manager with base directory for state files.
+        
+        This method creates the base directory if it doesn't exist and loads
+        any existing state files. State files are created on first use if they
+        don't exist.
         
         Args:
-            base_dir: Base directory for state files
+            base_dir: Base directory where state files will be stored.
+                    Directory is created if it doesn't exist.
+                    State files are stored with secure permissions (0600).
+        
+        Note:
+            State files use JSON format for human-readable debugging.
+            All state operations are atomic (write to temp file, then rename).
         """
         self.base_dir = base_dir
         self.base_dir.mkdir(parents=True, exist_ok=True)

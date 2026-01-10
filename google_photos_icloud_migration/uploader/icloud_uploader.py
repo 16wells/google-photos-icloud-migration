@@ -3,7 +3,16 @@ Upload media files to iCloud Photos using PhotoKit framework (macOS only).
 
 This module provides the iCloudPhotosSyncUploader class which uses Apple's PhotoKit
 framework to save photos directly to the Photos library, which then automatically
-syncs to iCloud Photos if enabled.
+syncs to iCloud Photos if enabled in System Settings.
+
+Features:
+- PhotoKit-based upload (no iCloud credentials needed)
+- Album creation and management
+- HEIC to JPEG conversion for compatibility
+- Upload tracking to prevent duplicates
+- Sync status monitoring
+- Comprehensive error handling and retry logic
+- Album caching for performance
 """
 import json
 import hashlib
@@ -19,24 +28,59 @@ logger = logging.getLogger(__name__)
 
 class iCloudPhotosSyncUploader:
     """
-    Uploader using PhotoKit framework to save photos to Photos library.
+    Uploader using PhotoKit framework to save photos to Photos library (macOS only).
     
-    This approach uses PhotoKit (PHPhotoLibrary) to save photos directly to the
-    Photos library, which then syncs to iCloud Photos automatically. This method
-    properly preserves EXIF metadata and is more reliable than API-based methods.
+    This class uses Apple's PhotoKit (PHPhotoLibrary) framework to save photos
+    directly to the Photos library on macOS. The Photos library then automatically
+    syncs to iCloud Photos if iCloud Photos is enabled in System Settings.
     
-    Note: Requires macOS and pyobjc-framework-Photos. Photos will automatically
-    sync to iCloud Photos if iCloud Photos is enabled in System Settings.
+    Key Features:
+    - No iCloud credentials needed (uses macOS iCloud account automatically)
+    - EXIF metadata preservation
+    - Album creation and management
+    - HEIC to JPEG conversion for unsupported formats
+    - Upload tracking to prevent duplicate uploads
+    - Sync status monitoring
+    - Album caching for improved performance
+    - Comprehensive error handling and validation
+    
+    Requirements:
+    - macOS (PhotoKit is macOS-only)
+    - pyobjc-framework-Photos package
+    - Photos library write permission (requested automatically)
+    - iCloud Photos enabled in System Settings (for syncing)
+    
+    Note:
+        Photos are saved to the Photos library first, then synced to iCloud Photos
+        automatically by macOS. This is the recommended and most reliable method.
     """
     
     def __init__(self, photos_library_path: Optional[Path] = None,
                  upload_tracking_file: Optional[Path] = None):
         """
-        Initialize the PhotoKit-based uploader.
+        Initialize the PhotoKit-based uploader with permission handling.
+        
+        This method initializes the uploader, checks for macOS, imports PhotoKit
+        framework, requests Photos library write permission, and sets up upload
+        tracking for duplicate prevention.
         
         Args:
-            photos_library_path: Path to Photos library (optional, not used with PhotoKit)
-            upload_tracking_file: Optional path to JSON file for tracking uploaded files
+            photos_library_path: Path to Photos library (optional, not used with PhotoKit).
+                              PhotoKit always uses the default Photos library.
+                              This parameter is kept for backward compatibility.
+            upload_tracking_file: Optional path to JSON file for tracking uploaded files.
+                                If provided, tracks uploaded files to prevent duplicates.
+                                If None, upload tracking is disabled (default).
+                                Format: JSON file mapping file identifiers to upload metadata.
+        
+        Raises:
+            RuntimeError: If not running on macOS (PhotoKit requires macOS)
+            ImportError: If pyobjc-framework-Photos is not installed
+            PermissionError: If Photos library write permission is denied and cannot be requested
+        
+        Note:
+            Permission dialog will appear on first use if permission hasn't been granted.
+            If no dialog appears, run `python3 scripts/request_photos_permission.py` to trigger it.
         """
         # Upload tracking to prevent duplicate uploads
         self.upload_tracking_file = upload_tracking_file
@@ -116,7 +160,7 @@ class iCloudPhotosSyncUploader:
                 logger.info("Requesting photo library write permission...")
                 logger.info("⚠️  IMPORTANT: A permission dialog should appear.")
                 logger.info("   If no dialog appears, you may need to grant permission manually.")
-                logger.info("   Run 'python3 request_photos_permission.py' to trigger the dialog.")
+                logger.info("   Run 'python3 scripts/request_photos_permission.py' to trigger the dialog.")
                 
                 # Request authorization using pyobjc's callback mechanism
                 from Foundation import NSRunLoop, NSDefaultRunLoopMode
@@ -151,7 +195,7 @@ class iCloudPhotosSyncUploader:
                     logger.warning("")
                     logger.warning("This usually means macOS didn't show the permission dialog.")
                     logger.warning("Please run this helper script to trigger the dialog:")
-                    logger.warning("  python3 request_photos_permission.py")
+                    logger.warning("  python3 scripts/request_photos_permission.py")
                     logger.warning("")
                     logger.warning("Or manually grant permission:")
                     logger.warning("1. Open System Settings > Privacy & Security > Photos")
@@ -460,6 +504,35 @@ class iCloudPhotosSyncUploader:
     
     def upload_file(self, file_path: Path, album_name: Optional[str] = None) -> bool:
         """
+        Upload a single media file to Photos library using PhotoKit.
+        
+        This method saves a media file to the Photos library and optionally adds it
+        to an album. The file is then automatically synced to iCloud Photos if enabled.
+        Includes automatic HEIC to JPEG conversion for compatibility and comprehensive
+        error handling.
+        
+        Args:
+            file_path: Path to media file to upload (JPEG, PNG, HEIC, MOV, MP4, etc.)
+            album_name: Optional album name to add the file to.
+                       If specified, creates the album if it doesn't exist.
+                       If None, file is saved to the library without an album (default).
+        
+        Returns:
+            True if file was successfully uploaded to Photos library, False otherwise.
+            Note: Upload to Photos library may succeed even if iCloud sync hasn't completed yet.
+        
+        Raises:
+            FileNotFoundError: If the file doesn't exist
+            PermissionError: If Photos library write permission is not granted
+            RuntimeError: If PhotoKit framework is not available or on non-macOS system
+        
+        Note:
+            - Files are tracked by hash to prevent duplicate uploads
+            - HEIC files are automatically converted to JPEG if PhotoKit fails
+            - Upload success means file is in Photos library; iCloud sync happens asynchronously
+            - Use check_file_sync_status() or monitor_uploaded_assets_sync_status() to check iCloud sync
+        """
+        """
         Save file to Photos library using PhotoKit.
         Optionally adds to an album if album_name is provided.
         
@@ -489,7 +562,7 @@ class iCloudPhotosSyncUploader:
                 logger.error("❌ Photo library write permission not granted")
                 logger.error("")
                 logger.error("To fix this, run the permission helper script first:")
-                logger.error("  python3 request_photos_permission.py")
+                logger.error("  python3 scripts/request_photos_permission.py")
                 logger.error("")
                 logger.error("Or manually grant permission:")
                 logger.error("1. Open System Settings > Privacy & Security > Photos")
@@ -497,7 +570,7 @@ class iCloudPhotosSyncUploader:
                 logger.error("   (If not listed, the permission dialog hasn't appeared yet)")
                 logger.error("3. Enable 'Add Photos Only' or 'Read and Write' permission")
                 logger.error("")
-                logger.error("Note: If no apps are listed, run: python3 request_photos_permission.py")
+                logger.error("Note: If no apps are listed, run: python3 scripts/request_photos_permission.py")
                 logger.error("      This will trigger the permission dialog.")
                 return False
             
@@ -1065,25 +1138,54 @@ class iCloudPhotosSyncUploader:
             return []
     
     def upload_files_batch(self, file_paths: List[Path],
-                          albums: Optional[Dict[Path, str]] = None,
-                          verify_after_upload: bool = True,
-                          on_verification_failure: Optional[Callable[[Path], None]] = None,
-                          on_upload_success: Optional[Callable[[Path], None]] = None) -> Dict[Path, bool]:
+                           albums: Optional[Dict[Path, Optional[str]]] = None,
+                           verify_after_upload: bool = True,
+                           on_verification_failure: Optional[Callable[[Path], None]] = None,
+                           on_upload_success: Optional[Callable[[Path], None]] = None,
+                           progress_callback: Optional[Callable[[int, int], None]] = None) -> Dict[Path, bool]:
         """
-        Upload multiple files in a batch, organized by album.
+        Upload multiple files to Photos library in batch, organized by album.
         
-        This method groups files by album and saves them efficiently,
-        creating albums as needed and reusing existing ones.
+        This method uploads multiple files efficiently, grouping them by album for optimal
+        performance. Includes comprehensive error handling, upload tracking, and optional
+        verification. PhotoKit handles concurrency internally for optimal performance.
         
         Args:
-            file_paths: List of file paths
-            albums: Optional mapping of files to album names
-            verify_after_upload: If True, verify each file after upload
-            on_verification_failure: Optional callback function(file_path) called when verification fails
-            on_upload_success: Optional callback function(file_path) called when upload succeeds
+            file_paths: List of file paths to upload to Photos library.
+            albums: Optional dictionary mapping file paths to album names.
+                   If None, files are uploaded without albums (default).
+                   If provided, each file is added to its specified album.
+                   Albums are created automatically if they don't exist.
+            verify_after_upload: If True, verify each file was successfully saved after upload
+                               (default: True). Verification checks that the file appears in
+                               the Photos library.
+            on_verification_failure: Optional callback function(file_path) called when verification
+                                    fails after a successful upload. Useful for logging or
+                                    retry logic.
+            on_upload_success: Optional callback function(file_path) called when upload succeeds.
+                              Useful for progress tracking or custom logging.
+            progress_callback: Optional callback function(current_count, total_count) called
+                             after each file is processed. Useful for progress tracking.
+                             Example: lambda current, total: print(f"{current}/{total}")
+                             Note: PhotoKit processes files asynchronously, so progress may
+                             not reflect exact real-time progress.
         
         Returns:
-            Dictionary mapping file paths to success status
+            Dictionary mapping each file path to upload success status (True/False).
+            All input file paths are guaranteed to be keys in the result dictionary.
+            False indicates the file failed to upload or verification failed (if enabled).
+        
+        Note:
+            PhotoKit handles file processing internally and manages concurrency automatically.
+            Files are grouped by album for efficient processing. Album creation happens
+            automatically as needed. Upload tracking prevents duplicate uploads if
+            upload_tracking_file was provided during initialization.
+        
+        Example:
+            >>> files = [Path("photo1.jpg"), Path("photo2.jpg")]
+            >>> albums = {files[0]: "Vacation", files[1]: "Vacation"}
+            >>> results = uploader.upload_files_batch(files, albums=albums)
+            >>> print(f"Uploaded {sum(results.values())}/{len(results)} files")
         """
         results = {}
         
@@ -1124,8 +1226,16 @@ class iCloudPhotosSyncUploader:
             else:
                 logger.info(f"Saving {len(files)} photos (no album)")
             
-            # Save files in this album
-            for file_path in tqdm(files, desc=f"Saving to Photos{album_name and f' ({album_name})' or ''}"):
+            # Save files in this album with progress tracking
+            total_files = len(files)
+            for idx, file_path in enumerate(tqdm(files, desc=f"Saving to Photos{album_name and f' ({album_name})' or ''}"), 1):
+                # Call progress callback if provided
+                if progress_callback:
+                    try:
+                        progress_callback(idx, total_files)
+                    except Exception as e:
+                        logger.debug(f"Error in progress callback: {e}")
+                
                 # Double-check file exists right before upload (in case it was deleted)
                 if not file_path.exists():
                     logger.warning(f"File no longer exists, skipping: {file_path}")
@@ -1140,7 +1250,10 @@ class iCloudPhotosSyncUploader:
                     if not verified:
                         logger.warning(f"Save verification failed for {file_path.name}")
                         if on_verification_failure:
-                            on_verification_failure(file_path)
+                            try:
+                                on_verification_failure(file_path)
+                            except Exception as e:
+                                logger.warning(f"Error in verification failure callback: {e}")
                         success = False
                 
                 # Call success callback if provided and upload was successful

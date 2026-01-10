@@ -1,6 +1,11 @@
 #!/bin/bash
-# Helper script to grant Photos permission to Terminal
-# This script creates a temporary macOS app that requests Photos permission
+# Alternative method to request Photos permission by creating a temporary macOS app
+#
+# This script creates a minimal macOS application bundle to trigger the permission
+# dialog, which can be more reliable than requesting directly from Python in some cases.
+#
+# For most users, scripts/request_photos_permission.py is simpler and recommended.
+# Use this script if the Python-based permission request doesn't trigger a dialog.
 
 set -e
 

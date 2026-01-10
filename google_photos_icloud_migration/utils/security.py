@@ -1,5 +1,10 @@
 """
-Security utilities for credential storage and management.
+Security utilities for credential storage and path validation.
+
+This module provides:
+- Secure credential storage using macOS Keychain (via keyring) or environment variables
+- Path validation to prevent security vulnerabilities (command injection, path traversal)
+- Secure file permission handling
 """
 import os
 import sys
@@ -22,7 +27,17 @@ class SecureCredentialStore:
     """
     Secure credential storage using macOS Keychain (via keyring) or environment variables.
     
-    Prefers keyring for macOS Keychain integration, falls back to environment variables.
+    This class provides secure credential storage with the following priority:
+    1. Environment variables (highest priority, for CI/CD and explicit configuration)
+    2. macOS Keychain via keyring library (if available)
+    3. Returns None if credential not found
+    
+    Prefers keyring for macOS Keychain integration (most secure), falls back to
+    environment variables for compatibility with CI/CD systems.
+    
+    Note:
+        Requires 'keyring' package for macOS Keychain support. Falls back gracefully
+        if keyring is not available, using environment variables only.
     """
     
     SERVICE_NAME = "google-photos-icloud-migration"
@@ -32,12 +47,24 @@ class SecureCredentialStore:
         """
         Retrieve a credential from secure storage.
         
+        This method checks multiple storage locations in priority order:
+        1. Environment variables (checked first, highest priority)
+        2. macOS Keychain via keyring (if keyring library is available)
+        3. Returns None if credential not found in any location
+        
         Args:
-            key: The credential key (e.g., 'google_drive_client_secret')
-            username: Optional username for keyring (defaults to current user)
-            
+            key: The credential key (e.g., 'google_drive_client_secret').
+               Environment variable names are automatically converted to uppercase
+               with underscores (e.g., 'client_secret' -> 'CLIENT_SECRET').
+            username: Optional username for keyring storage (defaults to current user).
+                    Not used for environment variable lookup.
+        
         Returns:
-            The credential value or None if not found
+            The credential value as a string, or None if not found in any storage location.
+        
+        Note:
+            Environment variable names are converted: key becomes KEY with underscores
+            replacing hyphens. For example, 'google-drive-secret' checks 'GOOGLE_DRIVE_SECRET'.
         """
         # First check environment variables (highest priority)
         env_key = key.upper().replace('-', '_')
@@ -202,3 +229,65 @@ def validate_file_size(file_path: Path, max_size_mb: Optional[float] = None) -> 
         return False
     
     return True
+
+
+def validate_subprocess_path(path: Path) -> None:
+    """
+    Validate a file path before passing to subprocess to prevent command injection.
+    
+    This function checks for dangerous characters and patterns that could be used
+    for command injection attacks when paths are passed to subprocess calls (e.g.,
+    ExifTool, ffmpeg). Paths are validated to ensure they don't contain shell
+    metacharacters or other dangerous patterns.
+    
+    Args:
+        path: Path object to validate before passing to subprocess
+    
+    Raises:
+        ValueError: If the path contains dangerous characters or patterns that
+                   could be used for command injection attacks.
+                   Common dangerous patterns include: shell metacharacters (; | &),
+                   command substitution (`), path traversal (..), etc.
+    
+    Note:
+        This validation is critical for security when paths are passed to external
+        commands via subprocess. Always validate paths before passing them to
+        subprocess.run(), subprocess.Popen(), or similar functions.
+    
+    Example:
+        >>> from pathlib import Path
+        >>> validate_subprocess_path(Path("photo.jpg"))  # OK
+        >>> validate_subprocess_path(Path("photo; rm -rf /"))  # Raises ValueError
+    """
+    path_str = str(path)
+    
+    # Check for shell metacharacters that could be used for command injection
+    dangerous_chars = [';', '|', '&', '`', '$', '(', ')', '<', '>', '\n', '\r']
+    for char in dangerous_chars:
+        if char in path_str:
+            raise ValueError(
+                f"Path contains dangerous character '{char}': {path_str}. "
+                f"This could be used for command injection attacks. "
+                f"Please use a safe filename."
+            )
+    
+    # Check for path traversal attempts
+    if '..' in path_str:
+        raise ValueError(
+            f"Path contains directory traversal pattern '..': {path_str}. "
+            f"This could be used for directory traversal attacks."
+        )
+    
+    # Check for absolute paths that might escape expected directories
+    # (This is context-dependent, so we just validate the path exists and is reasonable)
+    try:
+        resolved = path.resolve()
+        # Additional validation: ensure path doesn't contain non-printable characters
+        if not path_str.isprintable():
+            raise ValueError(
+                f"Path contains non-printable characters: {path_str}. "
+                f"This could cause issues in subprocess calls."
+            )
+    except (OSError, ValueError) as e:
+        # If path resolution fails, that's also a problem
+        raise ValueError(f"Invalid path for subprocess: {path_str} - {e}") from e

@@ -11,8 +11,8 @@ Quick checklist for preparing the new MacBook today.
 - [ ] **Run setup script**
   ```bash
   cd ~/google-photos-icloud-migration
-  chmod +x setup-macbook.sh
-  ./setup-macbook.sh
+  chmod +x scripts/setup-macbook.sh
+  ./scripts/setup-macbook.sh
   ```
   This installs: 
   - Xcode Command Line Tools (will show popup - click "Install" and wait)
@@ -28,7 +28,7 @@ Quick checklist for preparing the new MacBook today.
 
 - [ ] **Verify setup**
   ```bash
-  python3 verify-setup.py
+  python3 scripts/verify-setup.py
   ```
   All checks should pass ✓
 
@@ -55,7 +55,7 @@ Quick checklist for preparing the new MacBook today.
 - [ ] **Run migration**
   ```bash
   cd ~/google-photos-icloud-migration
-  python3 main.py --config config.yaml
+  python3 scripts/main.py --config config.yaml
   ```
 
 ## Files to Copy
@@ -69,8 +69,8 @@ Both should be in the repository root directory.
 
 ## Quick Reference
 
-- **Setup script**: `./setup-macbook.sh`
-- **Verification**: `python3 verify-setup.py`
+- **Setup script**: `./scripts/setup-macbook.sh`
+- **Verification**: `python3 scripts/verify-setup.py`
 - **Full guide**: See [COMPLETE_INSTALLATION_GUIDE.md](COMPLETE_INSTALLATION_GUIDE.md)
 - **Quick start**: See [QUICKSTART.md](QUICKSTART.md) (if you already have prerequisites)
 

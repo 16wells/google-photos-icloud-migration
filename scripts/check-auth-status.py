@@ -24,7 +24,7 @@ def check_cookies(apple_id: str):
     print("✓ No Apple ID credentials required")
     print()
     print("To check Photos library permission, run:")
-    print("  python3 request_photos_permission.py")
+    print("  python3 scripts/request_photos_permission.py")
     print()
     return True
 

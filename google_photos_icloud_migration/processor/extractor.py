@@ -1,10 +1,17 @@
 """
 Extract zip files and identify media/JSON file pairs.
+
+This module handles extraction of Google Takeout zip files with support for:
+- Secure temporary file handling during extraction
+- Generator-based file discovery for memory efficiency
+- Path validation to prevent security vulnerabilities
+- Comprehensive error handling and recovery
 """
 import zipfile
 import logging
+import tempfile
 from pathlib import Path
-from typing import List, Dict, Tuple, Set, Optional
+from typing import List, Dict, Tuple, Set, Optional, Iterator
 from tqdm import tqdm
 
 from google_photos_icloud_migration.exceptions import ExtractionError
@@ -32,19 +39,37 @@ class Extractor:
     
     def extract_zip(self, zip_path: Path, extract_to: Optional[Path] = None) -> Path:
         """
-        Extract a zip file maintaining directory structure.
+        Extract a zip file maintaining directory structure with secure path handling.
+        
+        This method extracts zip files with comprehensive security measures:
+        - Path validation to prevent zip slip attacks
+        - Symlink detection and skipping
+        - Secure file permissions (0600 for files, 0700 for directories)
+        - Proper error handling for corrupted or incomplete files
         
         Args:
-            zip_path: Path to zip file
-            extract_to: Optional destination directory (defaults to extracted_dir)
+            zip_path: Path to zip file to extract
+            extract_to: Optional destination directory.
+                       If None, uses extracted_dir/<zip_stem> as destination.
+                       Should be an absolute path for security.
         
         Returns:
-            Path to extracted directory
+            Path to the extracted directory containing all files
+        
+        Raises:
+            ExtractionError: If the zip file is invalid, corrupted, or extraction fails
+                            due to path validation issues or I/O errors
+        
+        Note:
+            Uses secure temporary directory handling and validates all extracted paths
+            to prevent directory traversal attacks (zip slip).
         """
         if extract_to is None:
             # Create a subdirectory based on zip file name
             extract_to = self.extracted_dir / zip_path.stem
         
+        # Ensure extract_to is absolute for security
+        extract_to = extract_to.resolve()
         extract_to.mkdir(parents=True, exist_ok=True)
         
         # Validate zip file before extraction (basic validation - check if we can open it)
@@ -157,9 +182,42 @@ class Extractor:
         logger.info(f"Extracted {zip_path.name}")
         return extract_to
     
-    def extract_all_zips(self, zip_files: List[Path]) -> List[Path]:
+    def extract_all_zips(self, zip_files: List[Path]) -> Iterator[Path]:
         """
-        Extract all zip files.
+        Extract all zip files using a generator for memory efficiency.
+        
+        This method extracts zip files one at a time, yielding results incrementally
+        rather than collecting all results in memory. This is more memory-efficient
+        for processing many large zip files.
+        
+        Args:
+            zip_files: List of zip file paths to extract
+        
+        Yields:
+            Path objects for each extracted directory, in the order files are processed
+        
+        Note:
+            This is a generator function that yields results incrementally,
+            allowing for memory-efficient processing of many zip files.
+        """
+        for zip_file in zip_files:
+            try:
+                extracted_dir = self.extract_zip(zip_file)
+                yield extracted_dir
+            except ExtractionError as e:
+                logger.error(f"Failed to extract {zip_file.name}: {e}")
+                # Continue with next zip file rather than failing completely
+                continue
+            except Exception as e:
+                logger.error(f"Unexpected error extracting {zip_file.name}: {e}")
+                continue
+    
+    def extract_all_zips_list(self, zip_files: List[Path]) -> List[Path]:
+        """
+        Extract all zip files (returns list for backward compatibility).
+        
+        This is a convenience method that collects generator results into a list.
+        Use extract_all_zips() directly for memory-efficient processing.
         
         Args:
             zip_files: List of zip file paths
@@ -167,17 +225,66 @@ class Extractor:
         Returns:
             List of extracted directory paths
         """
-        extracted_dirs = []
-        
-        for zip_file in zip_files:
-            extracted_dir = self.extract_zip(zip_file)
-            extracted_dirs.append(extracted_dir)
-        
-        return extracted_dirs
+        return list(self.extract_all_zips(zip_files))
     
-    def find_media_files(self, directory: Path) -> List[Path]:
+    def find_media_files(self, directory: Path) -> Iterator[Path]:
         """
-        Find all media files in a directory recursively.
+        Find all media files in a directory recursively using a generator.
+        
+        This method uses a generator to avoid loading all file paths into memory
+        at once, which is more memory-efficient for large directories.
+        
+        Args:
+            directory: Directory to search recursively
+        
+        Yields:
+            Path objects for each media file found
+        
+        Note:
+            This is a generator function that yields results incrementally,
+            allowing for memory-efficient processing of large directory structures.
+            The results are filtered to exclude __MACOSX files and hidden files.
+        """
+        seen_paths = set()  # Track seen paths to avoid duplicates from case-insensitive matching
+        
+        for ext in MEDIA_EXTENSIONS:
+            # Search for lowercase extensions
+            for file_path in directory.rglob(f"*{ext}"):
+                if file_path in seen_paths:
+                    continue
+                seen_paths.add(file_path)
+                
+                # Skip __MACOSX directory and its contents
+                if '__MACOSX' in str(file_path):
+                    continue
+                # Skip hidden files starting with ._
+                if file_path.name.startswith('._'):
+                    continue
+                
+                yield file_path
+            
+            # Search for uppercase extensions (avoid duplicate processing)
+            if ext != ext.upper():
+                for file_path in directory.rglob(f"*{ext.upper()}"):
+                    if file_path in seen_paths:
+                        continue
+                    seen_paths.add(file_path)
+                    
+                    # Skip __MACOSX directory and its contents
+                    if '__MACOSX' in str(file_path):
+                        continue
+                    # Skip hidden files starting with ._
+                    if file_path.name.startswith('._'):
+                        continue
+                    
+                    yield file_path
+    
+    def find_media_files_list(self, directory: Path) -> List[Path]:
+        """
+        Find all media files in a directory recursively (returns list).
+        
+        This is a convenience method that collects generator results into a list.
+        Use find_media_files() directly for memory-efficient processing.
         
         Args:
             directory: Directory to search
@@ -185,25 +292,9 @@ class Extractor:
         Returns:
             List of media file paths
         """
-        media_files = []
-        
-        for ext in MEDIA_EXTENSIONS:
-            media_files.extend(directory.rglob(f"*{ext}"))
-            media_files.extend(directory.rglob(f"*{ext.upper()}"))
-        
-        # Filter out __MACOSX files and hidden files starting with ._
-        filtered_files = []
-        for file_path in media_files:
-            # Skip __MACOSX directory and its contents
-            if '__MACOSX' in str(file_path):
-                continue
-            # Skip hidden files starting with ._
-            if file_path.name.startswith('._'):
-                continue
-            filtered_files.append(file_path)
-        
-        logger.debug(f"Found {len(filtered_files)} media files in {directory} (filtered {len(media_files) - len(filtered_files)} __MACOSX/hidden files)")
-        return filtered_files
+        files = list(self.find_media_files(directory))
+        logger.debug(f"Found {len(files)} media files in {directory}")
+        return files
     
     def find_json_metadata(self, media_file: Path) -> Optional[Path]:
         """
@@ -234,21 +325,32 @@ class Extractor:
         """
         Identify all media files and their corresponding JSON metadata files.
         
+        This method uses the generator-based find_media_files() for memory-efficient
+        processing, building a dictionary of media-to-JSON mappings.
+        
         Args:
-            directory: Directory to search
+            directory: Directory to search recursively
         
         Returns:
-            Dictionary mapping media file paths to JSON file paths (or None)
-        """
-        media_files = self.find_media_files(directory)
-        pairs = {}
+            Dictionary mapping media file paths to JSON file paths (or None if not found)
         
-        for media_file in media_files:
+        Note:
+            Uses generator-based file discovery for memory efficiency with large directories.
+        """
+        pairs = {}
+        media_count = 0
+        json_count = 0
+        
+        # Use generator for memory-efficient processing
+        for media_file in self.find_media_files(directory):
+            media_count += 1
             json_file = self.find_json_metadata(media_file)
             pairs[media_file] = json_file
+            if json_file is not None:
+                json_count += 1
         
-        logger.info(f"Identified {len(pairs)} media files, "
-                   f"{sum(1 for v in pairs.values() if v is not None)} with JSON metadata")
+        logger.info(f"Identified {media_count} media files, "
+                   f"{json_count} with JSON metadata")
         
         return pairs
     
@@ -256,20 +358,31 @@ class Extractor:
         """
         Extract album structure from directory hierarchy.
         
-        Google Takeout often organizes files by album in folders.
+        Google Takeout often organizes files by album in folders. This method
+        uses generator-based file discovery for memory efficiency with large
+        directory structures.
         
         Args:
-            directory: Root directory to analyze
+            directory: Root directory to analyze recursively
         
         Returns:
             Dictionary mapping album names to lists of media file paths
+        
+        Note:
+            Uses find_media_files() generator for memory-efficient processing
+            of large directory trees with many files.
         """
         albums = {}
-        media_files = self.find_media_files(directory)
         
-        for media_file in media_files:
+        # Use generator for memory-efficient processing
+        for media_file in self.find_media_files(directory):
             # Get relative path from root
-            rel_path = media_file.relative_to(directory)
+            try:
+                rel_path = media_file.relative_to(directory)
+            except ValueError:
+                # File is outside directory, skip it (shouldn't happen, but safety check)
+                logger.debug(f"Skipping file outside directory: {media_file}")
+                continue
             
             # Album is typically the parent directory name
             # Skip if file is directly in root

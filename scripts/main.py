@@ -28,8 +28,16 @@ from google_photos_icloud_migration.processor.extractor import Extractor
 from google_photos_icloud_migration.processor.metadata_merger import MetadataMerger
 from google_photos_icloud_migration.parser.album_parser import AlbumParser
 from google_photos_icloud_migration.uploader.icloud_uploader import iCloudPhotosSyncUploader
-from migration_statistics import MigrationStatistics  # Keep root-level for now
-from report_generator import ReportGenerator  # Keep root-level for now
+# Add parent directory to path to allow imports from package
+import sys
+from pathlib import Path
+script_dir = Path(__file__).parent
+project_root = script_dir.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+from scripts.migration_statistics import MigrationStatistics
+from scripts.report_generator import ReportGenerator
 from google_photos_icloud_migration.exceptions import ExtractionError
 from google_photos_icloud_migration.utils.state_manager import StateManager, ZipProcessingState
 
@@ -66,12 +74,19 @@ class MigrationOrchestrator:
         # Initialize extractor
         self.extractor = Extractor(self.base_dir)
         
-        # Initialize metadata merger
+        # Initialize metadata merger with parallel processing support
         metadata_config = self.config['metadata']
+        processing_config = self.config.get('processing', {})
+        enable_parallel = processing_config.get('enable_parallel_processing', True)
+        max_workers = processing_config.get('max_workers')
+        
         self.metadata_merger = MetadataMerger(
             preserve_dates=metadata_config['preserve_dates'],
             preserve_gps=metadata_config['preserve_gps'],
-            preserve_descriptions=metadata_config['preserve_descriptions']
+            preserve_descriptions=metadata_config['preserve_descriptions'],
+            enable_parallel=enable_parallel,
+            max_workers=max_workers,
+            cache_metadata=True  # Enable metadata caching for performance
         )
         
         # Initialize album parser
@@ -204,6 +219,23 @@ class MigrationOrchestrator:
     
     def extract_files(self, zip_files: List[Path]) -> List[Path]:
         """
+        Extract all zip files from the provided list.
+        
+        This method extracts zip files sequentially, tracking progress and handling
+        errors gracefully. Failed extractions are logged but don't stop the entire process.
+        
+        Args:
+            zip_files: List of zip file paths to extract
+        
+        Returns:
+            List of extracted directory paths (only successful extractions)
+        
+        Note:
+            Uses the extractor's extract_all_zips_list() method which collects
+            generator results into a list. For memory-efficient processing of many
+            large zips, consider using extract_all_zips() directly.
+        """
+        """
         Extract all zip files.
         
         Args:
@@ -216,7 +248,8 @@ class MigrationOrchestrator:
         logger.info("Phase 2: Extracting zip files")
         logger.info("=" * 60)
         
-        extracted_dirs = self.extractor.extract_all_zips(zip_files)
+        # Use list method for backward compatibility
+        extracted_dirs = self.extractor.extract_all_zips_list(zip_files)
         
         logger.info(f"Extracted {len(extracted_dirs)} zip files")
         return extracted_dirs
@@ -253,16 +286,24 @@ class MigrationOrchestrator:
         processed_dir = self.base_dir / self.config['processing']['processed_dir']
         processed_dir.mkdir(parents=True, exist_ok=True)
         
-        # Process in batches
+        # Process in batches (parallel processing is handled inside merge_all_metadata)
         batch_size = self.config['processing']['batch_size']
         all_files = list(all_pairs.keys())
+        processing_config = self.config.get('processing', {})
+        max_workers = processing_config.get('max_workers')
         
         for i in range(0, len(all_files), batch_size):
             batch = all_files[i:i + batch_size]
             batch_pairs = {f: all_pairs[f] for f in batch}
             
-            logger.info(f"Processing batch {i // batch_size + 1}/{(len(all_files) + batch_size - 1) // batch_size}")
-            self.metadata_merger.merge_all_metadata(batch_pairs, output_dir=processed_dir)
+            logger.info(f"Processing batch {i // batch_size + 1}/{(len(all_files) + batch_size - 1) // batch_size} "
+                       f"({len(batch_pairs)} files)")
+            # merge_all_metadata handles parallel processing internally if enabled
+            self.metadata_merger.merge_all_metadata(
+                batch_pairs, 
+                output_dir=processed_dir,
+                max_workers=max_workers
+            )
         
         # Update pairs to point to processed files
         processed_pairs = {}

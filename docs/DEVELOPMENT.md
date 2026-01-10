@@ -219,7 +219,7 @@ This:
 ```bash
 make run
 # or
-python main.py --config config.yaml
+python scripts/main.py --config config.yaml
 ```
 
 ### Run Health Check First
@@ -266,8 +266,6 @@ Review the output for specific issues:
 
 ## Additional Resources
 
-- **`CONTRIBUTING.md`** - Contribution guidelines
-- **`RECOMMENDATIONS.md`** - Repository improvement recommendations
-- **`IMPLEMENTATION_STATUS.md`** - Status of implemented recommendations
-- **`TESTING.md`** - Testing guide
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** - Contribution guidelines and development workflow
+- **[TESTING.md](TESTING.md)** - Testing guide
 - **`docs/`** - Sphinx documentation

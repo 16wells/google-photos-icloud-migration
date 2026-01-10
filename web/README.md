@@ -19,8 +19,8 @@ The web UI was removed because it was unreliable for long-running migrations (ti
 
 This directory can be safely removed if you don't plan to revive the web UI. The core functionality works entirely through terminal scripts:
 
-- `process_local_zips.py` - Process local zip files
-- `main.py` - Download from Google Drive and process
+- `scripts/process_local_zips.py` - Process local zip files
+- `scripts/main.py` - Download from Google Drive and process
 
 If you want to remove this directory:
 ```bash

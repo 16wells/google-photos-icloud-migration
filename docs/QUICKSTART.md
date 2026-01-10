@@ -19,7 +19,7 @@ pip install -r requirements.txt
 
 2. **Run the Authentication Setup Wizard (Recommended):**
 ```bash
-python3 auth_setup.py
+python3 scripts/auth_setup.py
 ```
 This will guide you through Google Drive OAuth setup and create your `config.yaml` file automatically.
 
@@ -33,12 +33,12 @@ cp config.yaml.example config.yaml
 
    **Option A: Process local zip files (if you already have Google Takeout zips):**
    ```bash
-   python3 process_local_zips.py --takeout-dir "/path/to/your/zips"
+   python3 scripts/process_local_zips.py --takeout-dir "/path/to/your/zips"
    ```
    
    **Option B: Download from Google Drive and process:**
    ```bash
-   python3 main.py --config config.yaml
+   python3 scripts/main.py --config config.yaml
    ```
    
    Both methods use Apple's PhotoKit framework to save photos directly to your Photos library, which then syncs to iCloud Photos automatically.
@@ -67,7 +67,7 @@ cp .env.example .env
 # Edit .env and add your Google Drive credentials
 # Note: iCloud credentials not needed - uses macOS iCloud account automatically
 ```
-Environment variables in `.env` take precedence over `config.yaml`. See [AUTHENTICATION_GUIDE.md](AUTHENTICATION_GUIDE.md) for details.
+Environment variables in `.env` take precedence over `config.yaml`. See the "Authentication" section in [README.md](../README.md) for details.
 
 ## First Run
 
@@ -86,7 +86,7 @@ Environment variables in `.env` take precedence over `config.yaml`. See [AUTHENT
 ## Troubleshooting
 
 **Problem**: "ExifTool not found"
-- **Solution**: Install ExifTool (see README.md)
+- **Solution**: Install ExifTool (see [README.md](../README.md))
 
 **Problem**: "Google Drive authentication failed"
 - **Solution**: Check credentials.json path and OAuth setup
@@ -103,10 +103,9 @@ Environment variables in `.env` take precedence over `config.yaml`. See [AUTHENT
 
 ## Next Steps
 
-- Read **README.md** for detailed documentation
-- Read **COMPLETE_INSTALLATION_GUIDE.md** for step-by-step setup on a new MacBook
-- Read **AUTHENTICATION_GUIDE.md** for authentication details
-- Read **TESTING.md** to test before full migration
+- Read **[README.md](../README.md)** for detailed documentation (includes authentication setup)
+- Read **[COMPLETE_INSTALLATION_GUIDE.md](COMPLETE_INSTALLATION_GUIDE.md)** for step-by-step setup on a new MacBook
+- Read **[TESTING.md](TESTING.md)** to test before full migration
 
 ## Support
 

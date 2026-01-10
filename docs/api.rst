@@ -1,7 +1,9 @@
 API Reference
 ==============
 
-This document provides detailed API documentation for the Google Photos to iCloud Migration tool.
+This document provides comprehensive API documentation for the Google Photos to iCloud Migration tool.
+
+The API is organized into logical modules for easy navigation:
 
 Core Modules
 ------------
@@ -13,84 +15,44 @@ Core Modules
    api/exceptions
    api/downloader
    api/processor
+   api/parser
    api/uploader
    api/utils
 
-Main Classes
-------------
+Main Orchestrator
+-----------------
 
 MigrationOrchestrator
 ~~~~~~~~~~~~~~~~~~~~~
 
-.. autoclass:: main.MigrationOrchestrator
-   :members:
+The main orchestrator class that coordinates the entire migration process.
+
+.. automodule:: main
+   :members: MigrationOrchestrator
    :undoc-members:
    :show-inheritance:
+   :member-order: bysource
 
-Configuration
-~~~~~~~~~~~~~
+Module Overview
+---------------
 
-.. automodule:: google_photos_icloud_migration.config
-   :members:
-   :undoc-members:
-   :show-inheritance:
+**Configuration (api/config)**
+    Configuration loading and validation with environment variable support
 
-Exceptions
-~~~~~~~~~~
+**Exceptions (api/exceptions)**
+    Custom exception classes for different error scenarios
 
-.. automodule:: google_photos_icloud_migration.exceptions
-   :members:
-   :undoc-members:
-   :show-inheritance:
+**Downloader (api/downloader)**
+    Google Drive API integration for downloading zip files
 
-Downloader
-~~~~~~~~~~
+**Processor (api/processor)**
+    File extraction, metadata merging, and video conversion
 
-.. automodule:: google_photos_icloud_migration.downloader.drive_downloader
-   :members:
-   :undoc-members:
-   :show-inheritance:
+**Parser (api/parser)**
+    Album structure parsing from directory and JSON metadata
 
-Processor
-~~~~~~~~~
+**Uploader (api/uploader)**
+    iCloud Photos upload using PhotoKit framework
 
-.. automodule:: google_photos_icloud_migration.processor.extractor
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-.. automodule:: google_photos_icloud_migration.processor.metadata_merger
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Uploader
-~~~~~~~~
-
-.. automodule:: google_photos_icloud_migration.uploader.icloud_uploader
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Utils
-~~~~~
-
-.. automodule:: google_photos_icloud_migration.utils.health_check
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-.. automodule:: google_photos_icloud_migration.utils.security
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-.. automodule:: google_photos_icloud_migration.utils.state_manager
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-.. automodule:: google_photos_icloud_migration.utils.logging_config
-   :members:
-   :undoc-members:
-   :show-inheritance:
+**Utilities (api/utils)**
+    Parallel processing, state management, security, retry logic, metrics, and logging

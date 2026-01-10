@@ -1,5 +1,8 @@
 """
 Retry utility with exponential backoff for network operations.
+
+This module provides decorator-based retry functionality with exponential backoff,
+useful for handling transient network errors and API rate limits.
 """
 import time
 import logging
@@ -22,16 +25,39 @@ def retry_with_backoff(
     """
     Decorator that retries a function with exponential backoff.
     
+    This decorator automatically retries a function when it raises specified exceptions,
+    using exponential backoff to gradually increase delay between retries. Useful for
+    handling transient network errors, API rate limits, and temporary service unavailability.
+    
     Args:
-        max_retries: Maximum number of retry attempts
-        initial_delay: Initial delay in seconds before first retry
-        max_delay: Maximum delay in seconds between retries
-        exponential_base: Base for exponential backoff calculation
-        exceptions: Tuple of exception types to catch and retry on
-        on_retry: Optional callback function(exception, attempt_number) called on each retry
+        max_retries: Maximum number of retry attempts (default: 3).
+                   Total attempts = max_retries + 1 (initial attempt + retries).
+        initial_delay: Initial delay in seconds before first retry (default: 1.0).
+                      Delay doubles (or uses exponential_base) with each retry.
+        max_delay: Maximum delay in seconds between retries (default: 60.0).
+                  Prevents excessive delays for very high retry counts.
+        exponential_base: Base for exponential backoff calculation (default: 2.0).
+                         Delay = initial_delay * (exponential_base ^ attempt_number).
+        exceptions: Tuple of exception types to catch and retry on (default: (Exception,)).
+                   Only these exception types trigger retries; other exceptions are re-raised.
+        on_retry: Optional callback function(exception, attempt_number) called on each retry.
+                If None, logs a warning message automatically.
+                Useful for custom logging or metrics collection.
     
     Returns:
-        Decorated function that retries on specified exceptions
+        Decorated function that automatically retries on specified exceptions.
+        The decorated function has the same signature as the original function.
+    
+    Raises:
+        The last exception raised if all retry attempts fail.
+    
+    Example:
+        >>> @retry_with_backoff(max_retries=3, initial_delay=1.0)
+        ... def download_file(url):
+        ...     return requests.get(url).content
+        >>> 
+        >>> # Will retry up to 3 times with delays: 1s, 2s, 4s
+        >>> content = download_file("https://example.com/file")
     """
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         @wraps(func)

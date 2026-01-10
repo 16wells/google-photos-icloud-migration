@@ -1,5 +1,14 @@
 #!/bin/bash
-# Comprehensive script to fix Photos permission issues on macOS
+# Comprehensive diagnostic and fix script for Photos permission issues on macOS
+# 
+# This script provides multiple solutions for Photos permission problems:
+# 1. Checks current permission status
+# 2. Attempts to grant permission programmatically
+# 3. Provides manual steps if automated methods fail
+# 4. Offers reset options as a last resort
+#
+# For most users, scripts/request_photos_permission.py is simpler and recommended.
+# Use this script for advanced troubleshooting when the basic helper doesn't work.
 
 echo "============================================================"
 echo "Photos Permission Fixer"
@@ -109,7 +118,7 @@ echo "   - Look for 'Python' in the list"
 echo "   - Enable 'Add Photos Only' permission"
 echo ""
 echo "3. Then run the migration with the full Python path:"
-echo "   $PYTHON_PATH process_local_zips.py --takeout-dir \"/path/to/your/zips\""
+echo "   $PYTHON_PATH scripts/process_local_zips.py --takeout-dir \"/path/to/your/zips\""
 echo ""
 echo "============================================================"
 echo "ALTERNATIVE: Reset and re-request permission"
@@ -118,7 +127,7 @@ echo ""
 echo "If nothing works, try resetting Photos permissions:"
 echo ""
 echo "1. Run: sudo tccutil reset Photos"
-echo "2. Run: python3 request_photos_permission.py"
+echo "2. Run: python3 scripts/request_photos_permission.py"
 echo "3. Grant permission when prompted"
 echo ""
 echo "Note: You may need to enter your password for 'sudo'"

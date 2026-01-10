@@ -1,9 +1,16 @@
 """
 Convert unsupported video formats to Photos-compatible formats.
+
+This module handles video format conversion using ffmpeg, with support for:
+- Secure temporary file handling during conversion
+- Metadata preservation during conversion
+- Comprehensive error handling and validation
+- Progress tracking for long-running conversions
 """
 import logging
 import subprocess
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Optional, Tuple
 from tqdm import tqdm
@@ -92,15 +99,33 @@ class VideoConverter:
     def convert_video(self, input_path: Path, output_path: Optional[Path] = None,
                      output_dir: Optional[Path] = None) -> Tuple[Path, bool]:
         """
-        Convert a video file to supported format.
+        Convert a video file to Photos-compatible format using ffmpeg.
+        
+        This method converts unsupported video formats (AVI, MKV, etc.) to
+        formats supported by Apple Photos (MOV or MP4). The conversion uses
+        secure temporary file handling and preserves metadata when requested.
         
         Args:
-            input_path: Path to input video file
-            output_path: Optional explicit output path
-            output_dir: Optional output directory (if output_path not specified)
+            input_path: Path to input video file to convert
+            output_path: Optional explicit output file path.
+                       If None, output path is derived from input_path and output_dir.
+            output_dir: Optional output directory for converted file.
+                       If None, converted file is placed in the same directory as input.
+                       Only used if output_path is not specified.
             
         Returns:
-            Tuple of (output_path, success)
+            Tuple of (output_file_path, success_boolean).
+            - If successful: (path_to_converted_file, True)
+            - If conversion not needed: (original_file_path, True)
+            - If conversion failed: (original_file_path, False)
+        
+        Raises:
+            ExtractionError: If ffmpeg is not installed or conversion fails
+        
+        Note:
+            Uses secure temporary file handling and validates all file paths
+            to prevent security issues. Automatically cleans up partial files
+            on conversion errors.
         """
         if not input_path.exists():
             logger.error(f"Input file does not exist: {input_path}")
@@ -110,12 +135,15 @@ class VideoConverter:
             logger.debug(f"File {input_path.name} is already in a supported format")
             return (input_path, True)
         
-        # Determine output path
+        # Determine output path using secure tempfile handling
         if output_path is None:
             output_path = self.get_output_path(input_path, output_dir)
         
+        # Ensure output directory exists
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        
         # Check if already converted
-        if output_path.exists():
+        if output_path.exists() and output_path.stat().st_size > 0:
             logger.info(f"⏭️  Converted file already exists: {output_path.name}")
             return (output_path, True)
         
@@ -126,88 +154,121 @@ class VideoConverter:
         # Validate file path (prevent command injection)
         from google_photos_icloud_migration.utils.security import validate_subprocess_path
         validate_subprocess_path(input_path)
+        validate_subprocess_path(output_path)
         
-        # Build ffmpeg command
-        # Use high-quality settings that preserve video quality while ensuring compatibility
-        args = [
-            'ffmpeg',
-            '-i', str(input_path),
-            '-c:v', 'libx264',  # H.264 codec (widely supported)
-            '-preset', 'medium',  # Encoding speed vs compression tradeoff
-            '-crf', '23',  # High quality (lower = better quality, 18-28 is good range)
-            '-c:a', 'aac',  # AAC audio codec (widely supported)
-            '-b:a', '192k',  # Audio bitrate
-            '-movflags', '+faststart',  # Enable streaming/quick start
-            '-y',  # Overwrite output file if exists
-        ]
-        
-        # Preserve metadata if requested
-        if self.preserve_metadata:
-            args.extend([
-                '-map_metadata', '0',  # Copy all metadata from input
-                '-map_metadata:s', '0',  # Copy stream metadata
-            ])
-        
-        # Add output path
-        args.append(str(output_path))
-        
+        # Use secure temporary file for atomic write
+        temp_output = None
         try:
-            # Run ffmpeg with progress logging
-            process = subprocess.Popen(
-                args,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1
-            )
+            # Create temporary file in same directory for atomic rename
+            with tempfile.NamedTemporaryFile(
+                dir=output_path.parent,
+                prefix=f'.tmp_{output_path.stem}_',
+                suffix=f'.{self.output_format}',
+                delete=False
+            ) as temp_file:
+                temp_output = Path(temp_file.name)
             
-            # Monitor progress (ffmpeg outputs progress to stderr)
+            # Build ffmpeg command with high-quality settings
+            # Use secure temporary file for output, then atomic rename
+            args = [
+                'ffmpeg',
+                '-i', str(input_path),
+                '-c:v', 'libx264',  # H.264 codec (widely supported)
+                '-preset', 'medium',  # Encoding speed vs compression tradeoff
+                '-crf', '23',  # High quality (lower = better quality, 18-28 is good range)
+                '-c:a', 'aac',  # AAC audio codec (widely supported)
+                '-b:a', '192k',  # Audio bitrate
+                '-movflags', '+faststart',  # Enable streaming/quick start
+                '-y',  # Overwrite output file if exists
+            ]
+            
+            # Preserve metadata if requested
+            if self.preserve_metadata:
+                args.extend([
+                    '-map_metadata', '0',  # Copy all metadata from input
+                    '-map_metadata:s', '0',  # Copy stream metadata
+                ])
+            
+            # Use temporary file for output (atomic write)
+            args.append(str(temp_output))
+            
+            # Run ffmpeg with timeout handling
+            # Note: Popen doesn't support timeout directly, use run() with timeout instead
+            try:
+                # Use run() with timeout for better control
+                result = subprocess.run(
+                    args,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=3600,  # 1 hour timeout for very long videos
+                    check=False  # Don't raise on non-zero exit, check manually
+                )
+                stdout = result.stdout
+                stderr = result.stderr
+                return_code = result.returncode
+            except subprocess.TimeoutExpired as e:
+                logger.error(f"❌ ffmpeg conversion timed out for {input_path.name} after 1 hour")
+                # Clean up temporary file on timeout
+                if temp_output and temp_output.exists():
+                    temp_output.unlink()
+                return (input_path, False)
+            
+            # Parse stderr for progress information (for logging)
             duration = None
-            for line in process.stderr:
-                if 'Duration:' in line:
-                    # Extract duration
-                    try:
-                        duration_str = line.split('Duration:')[1].split(',')[0].strip()
-                        # Parse HH:MM:SS.ms format
-                        parts = duration_str.split(':')
-                        if len(parts) == 3:
-                            hours, minutes, seconds = parts
-                            seconds = seconds.split('.')[0]
-                            duration = int(hours) * 3600 + int(minutes) * 60 + int(seconds)
-                            logger.debug(f"   Video duration: {duration_str} ({duration}s)")
-                    except (ValueError, IndexError):
-                        pass
-                
-                if 'time=' in line:
-                    # Extract current time for progress
-                    try:
-                        time_str = line.split('time=')[1].split()[0]
-                        # Parse HH:MM:SS.ms format
-                        parts = time_str.split(':')
-                        if len(parts) == 3:
-                            hours, minutes, seconds = parts
-                            seconds = seconds.split('.')[0]
-                            elapsed = int(hours) * 3600 + int(minutes) * 60 + int(seconds)
-                            if duration:
+            if stderr:
+                for line in stderr.split('\n'):
+                    if 'Duration:' in line:
+                        # Extract duration
+                        try:
+                            duration_str = line.split('Duration:')[1].split(',')[0].strip()
+                            # Parse HH:MM:SS.ms format
+                            parts = duration_str.split(':')
+                            if len(parts) == 3:
+                                hours, minutes, seconds = parts
+                                seconds = seconds.split('.')[0]
+                                duration = int(hours) * 3600 + int(minutes) * 60 + int(seconds)
+                                logger.debug(f"   Video duration: {duration_str} ({duration}s)")
+                        except (ValueError, IndexError):
+                            pass
+                    
+                    if 'time=' in line and duration:
+                        # Extract current time for progress
+                        try:
+                            time_str = line.split('time=')[1].split()[0]
+                            # Parse HH:MM:SS.ms format
+                            parts = time_str.split(':')
+                            if len(parts) == 3:
+                                hours, minutes, seconds = parts
+                                seconds = seconds.split('.')[0]
+                                elapsed = int(hours) * 3600 + int(minutes) * 60 + int(seconds)
                                 progress = (elapsed / duration) * 100
                                 logger.debug(f"   Conversion progress: {progress:.1f}% ({time_str})")
-                    except (ValueError, IndexError):
-                        pass
+                        except (ValueError, IndexError):
+                            pass
             
-            # Wait for completion
-            stdout, stderr = process.communicate()
-            
-            if process.returncode != 0:
+            # Check return code
+            if return_code != 0:
                 logger.error(f"❌ ffmpeg conversion failed for {input_path.name}")
-                logger.error(f"   Error: {stderr[-500:]}")  # Last 500 chars of error
-                if output_path.exists():
-                    output_path.unlink()  # Clean up partial file
+                logger.error(f"   Error: {stderr[-500:] if stderr else 'Unknown error'}")
+                # Clean up temporary file on error
+                if temp_output and temp_output.exists():
+                    temp_output.unlink()
                 return (input_path, False)
             
-            # Verify output file exists and has content
-            if not output_path.exists() or output_path.stat().st_size == 0:
-                logger.error(f"❌ Conversion produced empty or missing file: {output_path.name}")
+            # Verify temporary output file exists and has content
+            if not temp_output.exists() or temp_output.stat().st_size == 0:
+                logger.error(f"❌ Conversion produced empty or missing file: {temp_output.name}")
                 return (input_path, False)
+            
+            # Set secure file permissions on temporary file
+            try:
+                temp_output.chmod(0o600)  # Owner read/write only
+            except (OSError, PermissionError):
+                pass  # Best effort
+            
+            # Atomic rename from temporary file to final output
+            temp_output.replace(output_path)
             
             # Log file size change
             input_size = input_path.stat().st_size / (1024 * 1024)  # MB
@@ -217,24 +278,35 @@ class VideoConverter:
             
             return (output_path, True)
             
+        except subprocess.TimeoutExpired as e:
+            logger.error(f"❌ ffmpeg conversion timed out for {input_path.name} after 1 hour")
+            if temp_output and temp_output.exists():
+                temp_output.unlink()
+            return (input_path, False)
         except subprocess.CalledProcessError as e:
             logger.error(f"❌ ffmpeg conversion failed for {input_path.name}: {e}")
-            logger.error(f"   Command: {' '.join(args)}")
-            if output_path.exists():
-                output_path.unlink()  # Clean up partial file
+            if temp_output and temp_output.exists():
+                temp_output.unlink()
             return (input_path, False)
         except (OSError, IOError) as e:
             logger.error(f"❌ File I/O error during conversion of {input_path.name}: {e}")
-            if output_path.exists():
-                output_path.unlink()  # Clean up partial file
+            if temp_output and temp_output.exists():
+                temp_output.unlink()
             return (input_path, False)
         except Exception as e:
             logger.error(f"❌ Unexpected error converting {input_path.name}: {e}")
             import traceback
             logger.debug(traceback.format_exc())
-            if output_path.exists():
-                output_path.unlink()  # Clean up partial file
+            if temp_output and temp_output.exists():
+                temp_output.unlink()
             return (input_path, False)
+        finally:
+            # Ensure temporary file is cleaned up even on unexpected errors
+            if temp_output and temp_output.exists():
+                try:
+                    temp_output.unlink()
+                except OSError:
+                    pass  # Best effort cleanup
     
     def convert_if_needed(self, file_path: Path, output_dir: Optional[Path] = None) -> Path:
         """

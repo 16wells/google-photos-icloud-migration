@@ -332,7 +332,8 @@ class MigrationOrchestrator:
         logger.info("Phase 2: Extracting zip files")
         logger.info("=" * 60)
         
-        extracted_dirs = self.extractor.extract_all_zips(zip_files)
+        # Use list method for backward compatibility
+        extracted_dirs = self.extractor.extract_all_zips_list(zip_files)
         
         logger.info(f"Extracted {len(extracted_dirs)} zip files")
         return extracted_dirs

@@ -1,10 +1,18 @@
 """
 Extract and preserve album structures from Google Takeout.
+
+This module handles parsing album information from both directory structures
+and JSON metadata files, with support for:
+- Generator-based file discovery for memory efficiency
+- Caching of parsed album information
+- Merging album data from multiple sources (directory structure + JSON metadata)
+- Comprehensive error handling and validation
 """
 import json
 import logging
+import time
 from pathlib import Path
-from typing import Dict, List, Set, Optional
+from typing import Dict, List, Set, Optional, Iterator, Tuple
 
 from google_photos_icloud_migration.exceptions import AlbumError
 
@@ -12,40 +20,75 @@ logger = logging.getLogger(__name__)
 
 
 class AlbumParser:
-    """Handles parsing album structures from Google Takeout."""
+    """
+    Handles parsing album structures from Google Takeout.
     
-    def __init__(self):
-        """Initialize the album parser."""
+    This class extracts album information from both directory structures
+    and JSON metadata files, with support for:
+    - Memory-efficient generator-based file discovery
+    - Caching of parsed album information
+    - Merging album data from multiple sources
+    - Comprehensive album name cleaning and normalization
+    """
+    
+    def __init__(self, cache_albums: bool = True, cache_ttl_seconds: int = 3600):
+        """
+        Initialize the album parser with optional caching.
+        
+        Args:
+            cache_albums: Whether to cache parsed album information (default: True)
+            cache_ttl_seconds: Time-to-live for cached album data in seconds (default: 1 hour)
+        """
         self.albums: Dict[str, List[Path]] = {}
         self.file_to_album: Dict[Path, str] = {}
+        self.cache_albums = cache_albums
+        self.cache_ttl = cache_ttl_seconds
+        # Cache: maps directory path -> (parsed_albums, timestamp)
+        self._album_cache: Dict[Path, Tuple[Dict[str, List[Path]], float]] = {}
     
     def parse_from_directory_structure(self, directory: Path) -> Dict[str, List[Path]]:
         """
-        Parse album structure from directory hierarchy.
+        Parse album structure from directory hierarchy using efficient file discovery.
         
-        Google Takeout often organizes files by album in folders.
+        Google Takeout often organizes files by album in folders. This method uses
+        the Extractor's generator-based file discovery for memory-efficient processing.
         
         Args:
-            directory: Root directory to analyze
+            directory: Root directory to analyze recursively
         
         Returns:
             Dictionary mapping album names to lists of media file paths
+        
+        Note:
+            Uses Extractor.find_media_files() generator for memory-efficient
+            processing of large directory structures with many files.
         """
         albums = {}
-        media_extensions = {'.jpg', '.jpeg', '.heic', '.png', '.gif', '.bmp', '.tiff',
-                           '.avi', '.mov', '.mp4', '.m4v', '.3gp', '.mkv'}
         
         # Common top-level directories to skip (these are not album names)
         skip_directories = {'takeout', 'takeout-', 'photos from', 'photos'}
         
-        # Find all media files
-        media_files = []
-        for ext in media_extensions:
-            media_files.extend(directory.rglob(f"*{ext}"))
-            media_files.extend(directory.rglob(f"*{ext.upper()}"))
+        # Use Extractor's generator-based file discovery for memory efficiency
+        from google_photos_icloud_migration.processor.extractor import Extractor
         
-        # Group by directory (album)
-        for media_file in media_files:
+        # Check cache first if enabled
+        if self.cache_albums and directory in self._album_cache:
+            cached_albums, cached_time = self._album_cache[directory]
+            if time.time() - cached_time < self.cache_ttl:
+                logger.debug(f"Using cached album structure for {directory}")
+                self.albums = cached_albums.copy()
+                # Rebuild file_to_album mapping
+                self.file_to_album = {}
+                for album_name, files in self.albums.items():
+                    for file_path in files:
+                        self.file_to_album[file_path] = album_name
+                return self.albums
+        
+        # Create extractor for generator-based file discovery
+        extractor = Extractor(directory.parent if directory.parent != directory else Path('.'))
+        
+        # Find all media files using generator (memory-efficient)
+        for media_file in extractor.find_media_files(directory):
             rel_path = media_file.relative_to(directory)
             
             # Skip if file is directly in root
@@ -83,13 +126,48 @@ class AlbumParser:
         
         self.albums = albums
         
-        # Build reverse mapping
+        # Build reverse mapping (file_path -> album_name)
         for album_name, files in albums.items():
             for file_path in files:
                 self.file_to_album[file_path] = album_name
         
+        # Cache the result if caching is enabled
+        if self.cache_albums:
+            self._album_cache[directory] = (albums.copy(), time.time())
+            # Clean expired cache entries periodically
+            if len(self._album_cache) % 50 == 0:
+                self._clean_expired_album_cache()
+        
         logger.info(f"Identified {len(albums)} albums from directory structure")
         return albums
+    
+    def _clean_expired_album_cache(self) -> None:
+        """
+        Remove expired entries from the album cache.
+        
+        This method is called periodically to prevent memory leaks from
+        accumulating expired cache entries.
+        """
+        current_time = time.time()
+        expired_paths = [
+            path for path, (_, cached_time) in self._album_cache.items()
+            if current_time - cached_time >= self.cache_ttl
+        ]
+        for path in expired_paths:
+            del self._album_cache[path]
+        
+        if expired_paths:
+            logger.debug(f"Cleaned up {len(expired_paths)} expired album cache entries")
+    
+    def clear_album_cache(self) -> None:
+        """
+        Clear all cached album information.
+        
+        Useful for freeing memory or forcing re-parsing of all directories.
+        """
+        cache_size = len(self._album_cache)
+        self._album_cache.clear()
+        logger.debug(f"Cleared {cache_size} album cache entries")
     
     def parse_from_json_metadata(self, media_json_pairs: Dict[Path, Optional[Path]]) -> Dict[str, List[Path]]:
         """

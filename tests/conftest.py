@@ -39,7 +39,9 @@ def sample_config(tmp_path) -> Dict:
             'extracted_dir': 'extracted',
             'processed_dir': 'processed',
             'batch_size': 10,
-            'cleanup_after_upload': False
+            'cleanup_after_upload': False,
+            'enable_parallel_processing': True,
+            'max_workers': 2
         },
         'metadata': {
             'preserve_dates': True,

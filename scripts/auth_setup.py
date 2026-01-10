@@ -580,7 +580,7 @@ def run_auth_setup_wizard() -> bool:
         print("  python3 main.py --config config.yaml")
         print()
         print("Or process local zip files:")
-        print("  python3 process_local_zips.py --takeout-dir \"/path/to/your/zips\"")
+        print("  python3 scripts/process_local_zips.py --takeout-dir \"/path/to/your/zips\"")
         print()
         return True
     except Exception as e:
