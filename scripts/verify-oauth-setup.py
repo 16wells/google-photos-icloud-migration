@@ -201,7 +201,7 @@ def test_google_drive_connection(credentials_file: str = "credentials.json") -> 
                 print("   You need to authenticate first")
                 print()
                 print("To authenticate:")
-                print("  1. Run: python3 auth_setup.py")
+                print("  1. Run: python3 scripts/auth_setup.py")
                 print("  2. Or run the main script - it will prompt for authentication")
                 return False
         
@@ -256,9 +256,9 @@ def main():
     """Main function."""
     import argparse
     
-        parser = argparse.ArgumentParser(
-            description='Verify Google Drive OAuth credentials setup (for local macOS use)'
-        )
+    parser = argparse.ArgumentParser(
+        description='Verify Google Drive OAuth credentials setup (for local macOS use)'
+    )
     parser.add_argument(
         '--credentials',
         default='credentials.json',
@@ -273,7 +273,7 @@ def main():
     args = parser.parse_args()
     
     print()
-        print("Google Drive OAuth Credentials Verification")
+    print("Google Drive OAuth Credentials Verification")
     print("=" * 60)
     print()
     
@@ -298,7 +298,7 @@ def main():
         print("=" * 60)
         print()
         print("To test the actual connection to Google Drive API, run:")
-        print("  python3 verify-oauth-setup.py --test-connection")
+        print("  python3 scripts/verify-oauth-setup.py --test-connection")
         print()
     
     # Summary
@@ -335,9 +335,9 @@ def main():
         if not creds_status.get('valid'):
             print("  1. Set up Google Drive OAuth credentials (see instructions above)")
         if not token_status.get('exists'):
-            print("  2. Authenticate: python3 auth_setup.py")
-        print("  3. Test connection: python3 verify-oauth-setup.py --test-connection")
-        print("  4. Run migration: python3 main.py --config config.yaml")
+            print("  2. Authenticate: python3 scripts/auth_setup.py")
+        print("  3. Test connection: python3 scripts/verify-oauth-setup.py --test-connection")
+        print("  4. Run migration: python3 scripts/main.py --config config.yaml")
     
     print()
 

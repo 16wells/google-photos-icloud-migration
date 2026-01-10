@@ -46,10 +46,10 @@ type-check:  ## Run type checker
 check-all: format-check lint type-check  ## Run all checks (format, lint, type-check)
 
 run:  ## Run migration with default config
-	python main.py --config config.yaml
+	python scripts/main.py --config config.yaml
 
 run-sync:  ## Run migration with PhotoKit sync method (default, macOS only)
-	python main.py --config config.yaml
+	python scripts/main.py --config config.yaml
 
 clean:  ## Clean up temporary files and caches
 	find . -type d -name __pycache__ -exec rm -r {} + 2>/dev/null || true
