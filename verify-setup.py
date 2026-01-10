@@ -71,7 +71,7 @@ def main():
     print("Python Packages:")
     packages = [
         ('google-api-python-client', 'google.auth'),
-        ('pyicloud', 'pyicloud'),
+        ('pyobjc-framework-Photos', 'Photos'),
         ('Pillow', 'PIL'),
         ('PyYAML', 'yaml'),
         ('tqdm', 'tqdm'),
@@ -125,7 +125,7 @@ def main():
         else:
             print("  ⚠️  Photos app not found (unusual on macOS)")
     else:
-        print("  ⚠️  Not running on macOS (--use-sync requires macOS)")
+        print("  ⚠️  Not running on macOS (PhotoKit requires macOS)")
         all_ok = False
     print()
     
@@ -135,9 +135,9 @@ def main():
         print("✓ All checks passed! You're ready to run the migration.")
         print()
         print("Next steps:")
-        print("1. Sign into iCloud with your Apple ID")
+        print("1. Sign into iCloud with your Apple ID (if not already signed in)")
         print("2. Enable iCloud Photos in System Settings")
-        print("3. Run: python3 main.py --config config.yaml --use-sync")
+        print("3. Run: python3 main.py --config config.yaml")
     else:
         print("⚠️  Some checks failed. Please fix the issues above.")
         print()

@@ -125,6 +125,6 @@ echo "1. Copy credentials.json and config.yaml to this directory"
 echo "2. Verify setup by checking the files exist:"
 echo "   ls -la credentials.json config.yaml"
 echo "3. Tomorrow: Sign into iCloud and run:"
-echo "   python3 main.py --config config.yaml --use-sync"
+echo "   python3 main.py --config config.yaml"
 echo ""
 

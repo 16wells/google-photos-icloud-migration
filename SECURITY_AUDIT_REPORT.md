@@ -272,11 +272,14 @@ pip install -r requirements-lock.txt
 - ✅ Token refresh handled automatically
 - ✅ Clear error messages for expired tokens
 
-**iCloud Authentication:**
-- ✅ Password prompted securely with `getpass.getpass()`
-- ✅ Supports 2FA
-- ✅ Cookie storage in user directory (`~/.pyicloud`)
-- ✅ Cookie directory permissions set to 0700
+**iCloud Authentication (PhotoKit method):**
+- ✅ No authentication needed - uses macOS iCloud account automatically
+- ✅ No credentials stored or transmitted
+- ✅ Uses PhotoKit framework for direct Photos library access
+- ✅ Permission managed by macOS System Settings
+- ✅ Secure - no passwords or cookies involved
+
+**Note:** The old API method (pyicloud) has been removed. PhotoKit is the only supported method.
 
 **Recommendation:** No changes needed.
 

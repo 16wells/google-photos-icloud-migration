@@ -14,108 +14,43 @@ logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
 def check_cookies(apple_id: str):
-    """Check if authentication cookies exist and are recent."""
-    cookie_dir = Path.home() / ".pyicloud"
-    
+    """Check PhotoKit permission status (no cookies needed for PhotoKit method)."""
     print("=" * 60)
-    print("Authentication Cookie Status")
+    print("PhotoKit Permission Status")
     print("=" * 60)
     print()
-    
-    if not cookie_dir.exists():
-        print("❌ No cookie directory found")
-        print(f"   Location: {cookie_dir}")
-        print()
-        print("Cookies are created after successful authentication.")
-        return False
-    
-    print(f"✓ Cookie directory exists: {cookie_dir}")
-    
-    # Check for cookie files
-    cookie_files = list(cookie_dir.glob("*"))
-    if not cookie_files:
-        print("❌ Cookie directory is empty")
-        print("   Authentication cookies not found.")
-        return False
-    
-    print(f"✓ Found {len(cookie_files)} file(s) in cookie directory")
-    
-    # Check file ages
+    print("✓ This tool uses PhotoKit framework (macOS only)")
+    print("✓ No authentication cookies needed - uses your macOS iCloud account automatically")
+    print("✓ No Apple ID credentials required")
     print()
-    print("Cookie file ages:")
-    now = datetime.now()
-    for cookie_file in cookie_files[:10]:  # Show first 10 files
-        if cookie_file.is_file():
-            mtime = datetime.fromtimestamp(cookie_file.stat().st_mtime)
-            age = now - mtime
-            age_hours = age.total_seconds() / 3600
-            age_days = age.days
-            
-            status = "✓" if age_days < 7 else "⚠"
-            if age_days == 0:
-                age_str = f"{age_hours:.1f} hours ago"
-            else:
-                age_str = f"{age_days} day(s) ago"
-            
-            print(f"  {status} {cookie_file.name}: {age_str}")
-    
-    if len(cookie_files) > 10:
-        print(f"  ... and {len(cookie_files) - 10} more file(s)")
-    
+    print("To check Photos library permission, run:")
+    print("  python3 request_photos_permission.py")
     print()
-    
-    # Check if cookies are recent (less than 7 days old)
-    recent_cookies = any(
-        cookie_file.is_file() and 
-        (datetime.now() - datetime.fromtimestamp(cookie_file.stat().st_mtime)).days < 7
-        for cookie_file in cookie_files
-    )
-    
-    if recent_cookies:
-        print("✓ Recent cookies found (less than 7 days old)")
-        print("   These cookies may still be valid for authentication.")
-        print("   Try running the script - it may skip 2FA if cookies are valid.")
-        return True
-    else:
-        print("⚠ Cookies are older than 7 days")
-        print("   They may have expired. You may need to re-authenticate.")
-        return False
+    return True
 
 def check_env_vars():
-    """Check if 2FA environment variables are set."""
+    """Check if Google Drive credentials are set (iCloud credentials not needed)."""
     print("=" * 60)
     print("Environment Variables")
     print("=" * 60)
     print()
     
-    device_id = os.environ.get('ICLOUD_2FA_DEVICE_ID')
-    code = os.environ.get('ICLOUD_2FA_CODE')
+    credentials_file = os.environ.get('GOOGLE_DRIVE_CREDENTIALS_FILE')
     
-    if device_id:
-        print(f"✓ ICLOUD_2FA_DEVICE_ID is set: {device_id}")
+    if credentials_file:
+        print(f"✓ GOOGLE_DRIVE_CREDENTIALS_FILE is set: {credentials_file}")
     else:
-        print("❌ ICLOUD_2FA_DEVICE_ID is not set")
-    
-    if code:
-        print(f"✓ ICLOUD_2FA_CODE is set: {'*' * len(code)} (hidden)")
-    else:
-        print("❌ ICLOUD_2FA_CODE is not set")
+        print("⚠ GOOGLE_DRIVE_CREDENTIALS_FILE is not set")
+        print("   You can set this in .env file or config.yaml")
     
     print()
+    print("Note: No iCloud credentials needed - uses macOS iCloud account automatically via PhotoKit")
+    print()
     
-    if device_id and code:
-        print("✓ Both environment variables are set")
-        print("   The script can use these for non-interactive 2FA.")
-        return True
-    else:
-        print("⚠ Not all environment variables are set")
-        print("   For non-interactive mode, set both:")
-        print("     export ICLOUD_2FA_DEVICE_ID=<device_number>")
-        print("     export ICLOUD_2FA_CODE=<verification_code>")
-        return False
+    return True if credentials_file else False
 
 def check_config(config_path: str):
-    """Check config file for 2FA settings."""
+    """Check config file for Google Drive settings (iCloud settings not needed)."""
     print("=" * 60)
     print("Configuration File")
     print("=" * 60)
@@ -131,29 +66,24 @@ def check_config(config_path: str):
         with open(config_path, 'r') as f:
             config = yaml.safe_load(f)
         
-        icloud_config = config.get('icloud', {})
-        apple_id = icloud_config.get('apple_id', '')
-        trusted_device_id = icloud_config.get('trusted_device_id', '')
-        two_fa_code = icloud_config.get('two_fa_code', '')
+        google_drive_config = config.get('google_drive', {})
+        credentials_file = google_drive_config.get('credentials_file', '')
         
         print()
-        if apple_id:
-            print(f"✓ Apple ID configured: {apple_id}")
+        if credentials_file:
+            print(f"✓ Google Drive credentials file configured: {credentials_file}")
+            if os.path.exists(credentials_file):
+                print("  ✓ Credentials file exists")
+            else:
+                print("  ⚠ Credentials file not found at specified path")
         else:
-            print("❌ Apple ID not configured")
+            print("⚠ Google Drive credentials file not configured")
         
-        if trusted_device_id:
-            print(f"✓ Trusted device ID configured: {trusted_device_id}")
-        else:
-            print("⚠ Trusted device ID not configured")
-            print("   Set this for non-interactive 2FA support.")
-        
-        if two_fa_code:
-            print(f"✓ 2FA code configured: {'*' * len(two_fa_code)} (hidden)")
-            print("   Note: Codes expire quickly. This may be outdated.")
-        else:
-            print("⚠ 2FA code not configured")
-            print("   Use environment variables instead (ICLOUD_2FA_CODE)")
+        icloud_config = config.get('icloud', {})
+        print()
+        print("iCloud Configuration:")
+        print("  ✓ No credentials needed - uses macOS iCloud account automatically via PhotoKit")
+        print("  ✓ PhotoKit method is the only supported method (macOS only)")
         
     except Exception as e:
         print(f"❌ Error reading config file: {e}")
@@ -162,16 +92,15 @@ def test_auth_attempt(apple_id: str):
     """Try to test authentication (without actually authenticating)."""
     print()
     print("=" * 60)
-    print("Authentication Test")
+    print("Migration Test")
     print("=" * 60)
     print()
-    print("To test authentication, run the main script:")
+    print("To test the migration, run the main script:")
     print()
     print("  python3 main.py --config config.yaml")
     print()
-    print("Or use the PhotoKit sync method (macOS, recommended):")
-    print()
-    print("  python3 main.py --config config.yaml --use-sync")
+    print("Note: This tool uses PhotoKit (macOS only) and requires no iCloud authentication.")
+    print("It uses your macOS iCloud account automatically.")
     print()
 
 def main():
@@ -179,7 +108,7 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(
-        description='Check iCloud authentication status'
+        description='Check migration setup status (Google Drive and PhotoKit)'
     )
     parser.add_argument(
         '--config',
@@ -200,12 +129,15 @@ def main():
             pass
     
     print()
-    print("iCloud Authentication Status Check")
+    print("Migration Setup Status Check")
     print("=" * 60)
+    print()
+    print("Note: This tool uses PhotoKit framework (macOS only)")
+    print("      No iCloud authentication is needed - uses your macOS iCloud account automatically")
     print()
     
     # Check all components
-    cookie_valid = check_cookies(apple_id) if apple_id else False
+    check_cookies(apple_id if apple_id else "")
     env_vars_set = check_env_vars()
     check_config(args.config)
     
@@ -216,29 +148,27 @@ def main():
     print("=" * 60)
     print()
     
-    if cookie_valid:
-        print("✓ Authentication cookies found")
-        print("   You may be able to authenticate without 2FA.")
-    elif env_vars_set:
-        print("✓ Environment variables are set")
-        print("   Ready for non-interactive 2FA authentication.")
+    if env_vars_set:
+        print("✓ Google Drive credentials configured")
+        print("✓ Ready to run migration")
     else:
-        print("⚠ Authentication setup incomplete")
+        print("⚠ Google Drive credentials not configured")
         print()
-        print("To set up 2FA for non-interactive use:")
-        print("  1. Set ICLOUD_2FA_DEVICE_ID environment variable (device number)")
-        print("  2. Set ICLOUD_2FA_CODE environment variable with the code")
-        print("  3. Or use trusted_device_id and two_fa_code in config.yaml")
-        print("")
-        print("Note: For macOS users, the PhotoKit sync method (--use-sync) doesn't require 2FA.")
+        print("To set up Google Drive authentication:")
+        print("  1. Set GOOGLE_DRIVE_CREDENTIALS_FILE in .env file")
+        print("  2. Or configure credentials_file in config.yaml")
+        print("  3. Run: python3 auth_setup.py")
     
+    print()
+    print("✓ iCloud setup: No configuration needed")
+    print("  PhotoKit uses your macOS iCloud account automatically")
+    print("  Just ensure iCloud Photos is enabled in System Settings")
     print()
     
     if apple_id:
         test_auth_attempt(apple_id)
     else:
-        print("⚠ Apple ID not found in config")
-        print("   Update config.yaml with your Apple ID")
+        print("Next step: Configure Google Drive credentials and run the migration")
 
 if __name__ == '__main__':
     main()

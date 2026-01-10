@@ -455,69 +455,48 @@ class AppleAuthSetup:
         photos_lib = Path.home() / "Pictures" / "Photos Library.photoslibrary"
         return photos_lib.exists()
     
-    def interactive_setup(self, use_sync_method: bool = True) -> Dict[str, Any]:
+    def interactive_setup(self) -> Dict[str, Any]:
         """
-        Interactive setup for Apple/iCloud authentication.
+        Interactive setup for Apple/iCloud (PhotoKit method only).
         
-        Args:
-            use_sync_method: If True, use PhotoKit (no auth needed). If False, use API method.
+        Note: PhotoKit method requires no authentication - uses macOS iCloud account automatically.
         
         Returns:
-            Dictionary with apple_id and other auth info
+            Dictionary with iCloud configuration (no credentials needed)
         """
         print("\n" + "=" * 60)
-        print("Apple/iCloud Authentication Setup")
+        print("Apple/iCloud Setup")
         print("=" * 60)
         print()
+        print("Using PhotoKit sync method (macOS only)")
+        print("-" * 60)
+        print("✓ No authentication needed!")
+        print("✓ Uses your macOS iCloud account automatically")
+        print("✓ Photos will sync to iCloud Photos if enabled in System Settings")
+        print()
         
-        if use_sync_method:
-            print("Using PhotoKit sync method (--use-sync)")
-            print("-" * 60)
-            print("✓ No authentication needed!")
-            print("✓ Uses your macOS iCloud account automatically")
-            print("✓ Photos will sync to iCloud Photos if enabled in System Settings")
+        # Check if iCloud Photos is enabled
+        import platform
+        if platform.system() == 'Darwin':
+            print("To enable iCloud Photos:")
+            print("1. Open System Settings → Apple ID → iCloud")
+            print("2. Enable 'Photos' (or 'iCloud Photos')")
+            print("3. Choose 'Download Originals' or 'Optimize Storage'")
             print()
-            
-            # Check if iCloud Photos is enabled
-            import platform
-            if platform.system() == 'Darwin':
-                print("To enable iCloud Photos:")
-                print("1. Open System Settings → Apple ID → iCloud")
-                print("2. Enable 'Photos' (or 'iCloud Photos')")
-                print("3. Choose 'Download Originals' or 'Optimize Storage'")
-                print()
-                response = input("Is iCloud Photos enabled? (Y/n): ").strip().lower()
-                if response == 'n':
-                    print("\n⚠️  Please enable iCloud Photos in System Settings before running the migration.")
-                    print("   The tool will still work, but photos won't sync to iCloud automatically.")
-            
-            return {
-                'apple_id': None,  # Not needed for PhotoKit
-                'password': None,
-                'method': 'photokit'
-            }
+            response = input("Is iCloud Photos enabled? (Y/n): ").strip().lower()
+            if response == 'n':
+                print("\n⚠️  Please enable iCloud Photos in System Settings before running the migration.")
+                print("   The tool will still work, but photos won't sync to iCloud automatically.")
         else:
-            print("Using API method (requires Apple ID credentials)")
-            print("-" * 60)
-            print("⚠️  Note: Apple doesn't provide OAuth for iCloud Photos API")
-            print("   You'll need to provide your Apple ID and password")
-            print("   (Password is stored securely and only used for authentication)")
-            print()
-            
-            apple_id = input("Enter your Apple ID email: ").strip()
-            if not apple_id:
-                return {}
-            
-            print("\nPassword:")
-            print("- Leave empty to be prompted when needed")
-            print("- Or enter it now (will be stored in config)")
-            password = input("Apple ID password (optional): ").strip()
-            
-            return {
-                'apple_id': apple_id,
-                'password': password,
-                'method': 'api'
-            }
+            print("⚠️  Warning: This tool requires macOS for PhotoKit framework")
+            print("   PhotoKit is not available on this platform.")
+            return {}
+        
+        return {
+            'apple_id': None,  # Not needed for PhotoKit
+            'password': None,  # Not needed for PhotoKit
+            'method': 'photokit'
+        }
 
 
 def run_auth_setup_wizard() -> bool:
@@ -552,25 +531,14 @@ def run_auth_setup_wizard() -> bool:
     print("Apple/iCloud Setup")
     print("=" * 60)
     print()
-    print("Which method do you want to use for uploading to iCloud Photos?")
+    print("This tool uses PhotoKit framework (macOS only)")
+    print("- No authentication needed")
+    print("- Uses your macOS iCloud account automatically")
+    print("- Requires macOS")
     print()
-    print("1. PhotoKit Sync (Recommended for macOS)")
-    print("   - No authentication needed")
-    print("   - Uses system iCloud account")
-    print("   - Preserves all metadata")
-    print("   - Requires macOS")
-    print()
-    print("2. API Method (Alternative)")
-    print("   - Requires Apple ID and password")
-    print("   - Works on any platform")
-    print("   - May have limitations")
-    print()
-    
-    choice = input("Choose method (1 or 2): ").strip()
-    use_sync = (choice == '1')
     
     apple_auth = AppleAuthSetup()
-    apple_config = apple_auth.interactive_setup(use_sync_method=use_sync)
+    apple_config = apple_auth.interactive_setup()
     
     # Save configuration
     config = {
@@ -609,10 +577,10 @@ def run_auth_setup_wizard() -> bool:
         print("=" * 60)
         print()
         print("You can now run the migration:")
-        if use_sync:
-            print("  python3 main.py --config config.yaml --use-sync")
-        else:
-            print("  python3 main.py --config config.yaml")
+        print("  python3 main.py --config config.yaml")
+        print()
+        print("Or process local zip files:")
+        print("  python3 process_local_zips.py --takeout-dir \"/path/to/your/zips\"")
         print()
         return True
     except Exception as e:

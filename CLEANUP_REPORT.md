@@ -66,7 +66,7 @@ This report identifies outdated files, incorrect documentation, and cleanup oppo
 - `init-git.sh` - Initialize git (likely still useful)
 - `grant_photos_permission.sh` - Grant Photos permission (alternative method)
 - `fix_photos_permission.sh` - Fix Photos permission (helper)
-- `clear-icloud-cookies.sh` - Clear iCloud cookies (for API method)
+- `clear-icloud-cookies.sh` - PhotoKit permission helper (updated - no cookies needed for PhotoKit)
 - `create-config-on-vm.sh` - VM setup (if using VMs)
 - `finish-vm-setup.sh` - VM setup (if using VMs)
 - `upload-to-vm.sh` - VM setup (if using VMs)
