@@ -31,11 +31,13 @@ class TestExtractor:
     
     def test_extract_invalid_zip(self, tmp_path):
         """Test that invalid zip files raise appropriate exceptions."""
+        from google_photos_icloud_migration.exceptions import ExtractionError
         extractor = Extractor(tmp_path)
         invalid_zip = tmp_path / 'not-a-zip.txt'
         invalid_zip.write_text("This is not a zip file")
         
-        with pytest.raises((zipfile.BadZipFile, ValueError)):
+        # ExtractionError wraps BadZipFile
+        with pytest.raises(ExtractionError):
             extractor.extract_zip(invalid_zip)
     
     def test_identify_media_json_pairs(self, sample_zip_file, tmp_path):

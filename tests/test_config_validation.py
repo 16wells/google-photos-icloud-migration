@@ -204,12 +204,13 @@ class TestMigrationConfig:
             "google_drive": {
                 "credentials_file": "credentials.json"
             }
-            # Missing required "processing" section
+            # Missing required "processing" section with base_dir
         }
         
         config_file = tmp_path / "config.yaml"
         with open(config_file, 'w') as f:
             yaml.dump(config_dict, f)
         
-        with pytest.raises((ConfigurationError, ValueError, KeyError)):
+        # ProcessingConfig requires base_dir, so this should raise an error
+        with pytest.raises((ConfigurationError, ValueError, KeyError, TypeError)):
             MigrationConfig.from_yaml(str(config_file), validate=False)

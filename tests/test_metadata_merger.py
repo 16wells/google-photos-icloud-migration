@@ -52,7 +52,7 @@ class TestMetadataMerger:
         result = merger.convert_timestamp("invalid")
         assert result is None
     
-    @patch('metadata_merger.subprocess.run')
+    @patch('google_photos_icloud_migration.processor.metadata_merger.subprocess.run')
     def test_merge_metadata_success(self, mock_subprocess, tmp_path, sample_metadata_json):
         """Test successful metadata merging."""
         merger = MetadataMerger()
@@ -69,7 +69,7 @@ class TestMetadataMerger:
         assert result is True
         mock_subprocess.assert_called_once()
     
-    @patch('metadata_merger.subprocess.run')
+    @patch('google_photos_icloud_migration.processor.metadata_merger.subprocess.run')
     def test_merge_metadata_no_json(self, mock_subprocess, tmp_path):
         """Test metadata merging when no JSON file is provided."""
         merger = MetadataMerger()
@@ -82,7 +82,7 @@ class TestMetadataMerger:
         # Should return True even without JSON (no-op)
         assert result is True
     
-    @patch('metadata_merger.subprocess.run')
+    @patch('google_photos_icloud_migration.processor.metadata_merger.subprocess.run')
     def test_merge_metadata_exiftool_not_found(self, mock_subprocess, tmp_path, sample_metadata_json):
         """Test handling when ExifTool is not found."""
         merger = MetadataMerger()
