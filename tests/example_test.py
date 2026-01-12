@@ -49,14 +49,14 @@ def test_extract_zip_file(mock_zipfile, tmp_path):
 def test_invalid_zip_file(tmp_path):
     """Test that invalid zip files are handled gracefully."""
     from google_photos_icloud_migration.processor.extractor import Extractor
-    import zipfile
+    from google_photos_icloud_migration.exceptions import ExtractionError
     
     extractor = Extractor(tmp_path)
     invalid_zip = tmp_path / "not-a-zip.txt"
     invalid_zip.write_text("This is not a zip file")
     
     # Should raise an appropriate exception
-    with pytest.raises((zipfile.BadZipFile, ValueError)):
+    with pytest.raises(ExtractionError):
         extractor.extract_zip(invalid_zip)
 
 

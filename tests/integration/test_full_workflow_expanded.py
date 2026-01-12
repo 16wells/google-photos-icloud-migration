@@ -14,38 +14,48 @@ from unittest.mock import Mock, patch, MagicMock, call
 import json
 import yaml
 
-from main import MigrationOrchestrator
+import sys
+from pathlib import Path
+
+# Add project root to path for imports
+project_root = Path(__file__).parent.parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+from scripts.main import MigrationOrchestrator
 from google_photos_icloud_migration.exceptions import (
     ExtractionError, MetadataError, DownloadError, UploadError
 )
+
+
+# Shared fixture for all integration tests
+@pytest.fixture
+def mock_config_file(tmp_path, sample_config):
+    """Create a mock config file for testing with parallel processing enabled."""
+    # Update config to enable parallel processing
+    sample_config['processing']['enable_parallel_processing'] = True
+    sample_config['processing']['max_workers'] = 2
+    sample_config['processing']['batch_size'] = 10
+    
+    config_file = tmp_path / "config.yaml"
+    with open(config_file, 'w') as f:
+        yaml.dump(sample_config, f)
+    return config_file
 
 
 @pytest.mark.integration
 class TestFullWorkflowExpanded:
     """Expanded integration tests for full migration workflow."""
     
-    @pytest.fixture
-    def mock_config_file(self, tmp_path, sample_config):
-        """Create a mock config file for testing with parallel processing enabled."""
-        # Update config to enable parallel processing
-        sample_config['processing']['enable_parallel_processing'] = True
-        sample_config['processing']['max_workers'] = 2
-        sample_config['processing']['batch_size'] = 10
-        
-        config_file = tmp_path / "config.yaml"
-        with open(config_file, 'w') as f:
-            yaml.dump(sample_config, f)
-        return config_file
-    
     @pytest.mark.slow
     def test_full_workflow_with_parallel_processing(self, mock_config_file, tmp_path, sample_zip_file):
         """Test the full workflow with parallel processing enabled."""
-        with patch('main.DriveDownloader') as MockDownloader, \
-             patch('main.Extractor') as MockExtractor, \
-             patch('main.MetadataMerger') as MockMetadataMerger, \
-             patch('main.AlbumParser') as MockAlbumParser, \
-             patch('main.iCloudPhotosSyncUploader') as MockUploader, \
-             patch('main.StateManager') as MockStateManager:
+        with patch('scripts.main.DriveDownloader') as MockDownloader, \
+             patch('scripts.main.Extractor') as MockExtractor, \
+             patch('scripts.main.MetadataMerger') as MockMetadataMerger, \
+             patch('scripts.main.AlbumParser') as MockAlbumParser, \
+             patch('scripts.main.iCloudPhotosSyncUploader') as MockUploader, \
+             patch('scripts.main.StateManager') as MockStateManager:
             
             # Setup mocks
             mock_downloader = MockDownloader.return_value
@@ -79,6 +89,8 @@ class TestFullWorkflowExpanded:
                 processed_file2: True
             }
             mock_merger.merge_metadata.return_value = True
+            # Configure enable_parallel attribute for the mock instance
+            mock_merger.enable_parallel = True
             
             # Mock album parser
             mock_parser.parse_from_directory_structure.return_value = {
@@ -117,9 +129,9 @@ class TestFullWorkflowExpanded:
     
     def test_workflow_with_extraction_error_recovery(self, mock_config_file, tmp_path):
         """Test workflow recovery from extraction errors."""
-        with patch('main.DriveDownloader') as MockDownloader, \
-             patch('main.Extractor') as MockExtractor, \
-             patch('main.StateManager') as MockStateManager:
+        with patch('scripts.main.DriveDownloader') as MockDownloader, \
+             patch('scripts.main.Extractor') as MockExtractor, \
+             patch('scripts.main.StateManager') as MockStateManager:
             
             mock_downloader = MockDownloader.return_value
             mock_extractor = MockExtractor.return_value
@@ -158,10 +170,10 @@ class TestFullWorkflowExpanded:
     
     def test_workflow_with_metadata_errors(self, mock_config_file, tmp_path):
         """Test workflow behavior with metadata processing errors."""
-        with patch('main.DriveDownloader'), \
-             patch('main.Extractor') as MockExtractor, \
-             patch('main.MetadataMerger') as MockMetadataMerger, \
-             patch('main.StateManager'):
+        with patch('scripts.main.DriveDownloader'), \
+             patch('scripts.main.Extractor') as MockExtractor, \
+             patch('scripts.main.MetadataMerger') as MockMetadataMerger, \
+             patch('scripts.main.StateManager'):
             
             mock_extractor = MockExtractor.return_value
             mock_merger = MockMetadataMerger.return_value
@@ -190,7 +202,7 @@ class TestFullWorkflowExpanded:
     
     def test_workflow_with_parallel_metadata_processing(self, mock_config_file, tmp_path):
         """Test metadata processing with parallel processing enabled."""
-        with patch('main.MetadataMerger') as MockMetadataMerger:
+        with patch('scripts.main.MetadataMerger') as MockMetadataMerger:
             # Create merger with parallel processing enabled
             from google_photos_icloud_migration.processor.metadata_merger import MetadataMerger
             
@@ -210,7 +222,7 @@ class TestFullWorkflowExpanded:
     
     def test_workflow_with_state_persistence(self, mock_config_file, tmp_path):
         """Test workflow state persistence and resumability."""
-        with patch('main.StateManager') as MockStateManager:
+        with patch('scripts.main.StateManager') as MockStateManager:
             state_manager = MockStateManager.return_value
             
             # Mock state persistence
@@ -234,8 +246,8 @@ class TestFullWorkflowExpanded:
     
     def test_workflow_error_recovery(self, mock_config_file):
         """Test error recovery at different stages."""
-        with patch('main.DriveDownloader') as MockDownloader, \
-             patch('main.StateManager') as MockStateManager:
+        with patch('scripts.main.DriveDownloader') as MockDownloader, \
+             patch('scripts.main.StateManager') as MockStateManager:
             
             mock_downloader = MockDownloader.return_value
             mock_state = MockStateManager.return_value
@@ -252,10 +264,10 @@ class TestFullWorkflowExpanded:
     
     def test_workflow_with_large_file_batch(self, mock_config_file, tmp_path):
         """Test workflow with a large batch of files for performance."""
-        with patch('main.DriveDownloader'), \
-             patch('main.Extractor'), \
-             patch('main.MetadataMerger') as MockMetadataMerger, \
-             patch('main.StateManager'):
+        with patch('scripts.main.DriveDownloader'), \
+             patch('scripts.main.Extractor'), \
+             patch('scripts.main.MetadataMerger') as MockMetadataMerger, \
+             patch('scripts.main.StateManager'):
             
             mock_merger = MockMetadataMerger.return_value
             
@@ -277,8 +289,8 @@ class TestFullWorkflowExpanded:
     
     def test_workflow_with_missing_metadata(self, mock_config_file, tmp_path):
         """Test workflow when some files lack metadata."""
-        with patch('main.Extractor') as MockExtractor, \
-             patch('main.MetadataMerger') as MockMetadataMerger:
+        with patch('scripts.main.Extractor') as MockExtractor, \
+             patch('scripts.main.MetadataMerger') as MockMetadataMerger:
             
             mock_extractor = MockExtractor.return_value
             mock_merger = MockMetadataMerger.return_value
@@ -423,8 +435,8 @@ class TestErrorScenarios:
     
     def test_disk_space_error(self, mock_config_file, tmp_path):
         """Test handling of disk space errors."""
-        with patch('main.DriveDownloader') as MockDownloader, \
-             patch('main.StateManager'):
+        with patch('scripts.main.DriveDownloader') as MockDownloader, \
+             patch('scripts.main.StateManager'):
             
             mock_downloader = MockDownloader.return_value
             mock_downloader.download_file.side_effect = OSError(28, "No space left on device")
@@ -437,7 +449,7 @@ class TestErrorScenarios:
     
     def test_partial_failure_recovery(self, mock_config_file):
         """Test recovery from partial failures."""
-        with patch('main.StateManager') as MockStateManager:
+        with patch('scripts.main.StateManager') as MockStateManager:
             mock_state = MockStateManager.return_value
             
             # Mock partial failure state
