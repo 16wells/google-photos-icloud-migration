@@ -11,6 +11,12 @@ from typing import List, Optional, Dict
 import yaml
 import zipfile
 
+# Add parent directory to path to allow imports from package
+script_dir = Path(__file__).parent
+project_root = script_dir.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
 from google_photos_icloud_migration.processor.extractor import Extractor
 from google_photos_icloud_migration.processor.metadata_merger import MetadataMerger
 from google_photos_icloud_migration.parser.album_parser import AlbumParser

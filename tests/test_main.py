@@ -8,7 +8,19 @@ from unittest.mock import Mock, patch, MagicMock
 import pytest
 import yaml
 
-from main import MigrationOrchestrator, MigrationStoppedException
+import sys
+from pathlib import Path
+from unittest.mock import Mock, patch, MagicMock
+
+import pytest
+import yaml
+
+# Add project root to path for imports
+project_root = Path(__file__).parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+from scripts.main import MigrationOrchestrator, MigrationStoppedException
 
 
 class TestMigrationOrchestrator:
@@ -16,10 +28,10 @@ class TestMigrationOrchestrator:
     
     def test_initialization(self, config_file):
         """Test that MigrationOrchestrator can be initialized."""
-        with patch('main.DriveDownloader'), \
-             patch('main.Extractor'), \
-             patch('main.MetadataMerger'), \
-             patch('main.AlbumParser'):
+        with patch('scripts.main.DriveDownloader'), \
+             patch('scripts.main.Extractor'), \
+             patch('scripts.main.MetadataMerger'), \
+             patch('scripts.main.AlbumParser'):
             
             orchestrator = MigrationOrchestrator(str(config_file))
             
@@ -29,10 +41,10 @@ class TestMigrationOrchestrator:
     
     def test_load_config(self, config_file, sample_config):
         """Test configuration loading."""
-        with patch('main.DriveDownloader'), \
-             patch('main.Extractor'), \
-             patch('main.MetadataMerger'), \
-             patch('main.AlbumParser'):
+        with patch('scripts.main.DriveDownloader'), \
+             patch('scripts.main.Extractor'), \
+             patch('scripts.main.MetadataMerger'), \
+             patch('scripts.main.AlbumParser'):
             
             orchestrator = MigrationOrchestrator(str(config_file))
             
@@ -51,10 +63,10 @@ class TestMigrationOrchestrator:
         with open(config_file, 'w') as f:
             yaml.dump(minimal_config, f)
         
-        with patch('main.DriveDownloader'), \
-             patch('main.Extractor'), \
-             patch('main.MetadataMerger'), \
-             patch('main.AlbumParser'):
+        with patch('scripts.main.DriveDownloader'), \
+             patch('scripts.main.Extractor'), \
+             patch('scripts.main.MetadataMerger'), \
+             patch('scripts.main.AlbumParser'):
             
             orchestrator = MigrationOrchestrator(str(config_file))
             
@@ -62,10 +74,10 @@ class TestMigrationOrchestrator:
             assert 'batch_size' in orchestrator.config['processing']
             assert orchestrator.config['processing']['batch_size'] == 100
     
-    @patch('main.DriveDownloader')
-    @patch('main.Extractor')
-    @patch('main.MetadataMerger')
-    @patch('main.AlbumParser')
+    @patch('scripts.main.DriveDownloader')
+    @patch('scripts.main.Extractor')
+    @patch('scripts.main.MetadataMerger')
+    @patch('scripts.main.AlbumParser')
     def test_setup_logging(self, mock_parser, mock_merger, mock_extractor, mock_downloader, config_file):
         """Test that logging is set up correctly."""
         orchestrator = MigrationOrchestrator(str(config_file))

@@ -5,7 +5,15 @@ These tests verify the end-to-end process with mocked external dependencies.
 import pytest
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
-from main import MigrationOrchestrator
+import sys
+from pathlib import Path
+
+# Add project root to path for imports
+project_root = Path(__file__).parent.parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+from scripts.main import MigrationOrchestrator
 
 
 @pytest.mark.integration
@@ -24,12 +32,12 @@ class TestFullWorkflow:
     @pytest.mark.slow
     def test_download_extract_process_upload_workflow(self, mock_config_file, tmp_path, sample_zip_file):
         """Test the full workflow: download, extract, process, upload."""
-        with patch('main.DriveDownloader') as MockDownloader, \
-             patch('main.Extractor') as MockExtractor, \
-             patch('main.MetadataMerger') as MockMetadataMerger, \
-             patch('main.AlbumParser') as MockAlbumParser, \
-             patch('main.iCloudPhotosSyncUploader') as MockUploader, \
-             patch('main.StateManager') as MockStateManager:
+        with patch('scripts.main.DriveDownloader') as MockDownloader, \
+             patch('scripts.main.Extractor') as MockExtractor, \
+             patch('scripts.main.MetadataMerger') as MockMetadataMerger, \
+             patch('scripts.main.AlbumParser') as MockAlbumParser, \
+             patch('scripts.main.iCloudPhotosSyncUploader') as MockUploader, \
+             patch('scripts.main.StateManager') as MockStateManager:
             
             # Setup mocks
             mock_downloader = MockDownloader.return_value
@@ -83,11 +91,11 @@ class TestFullWorkflow:
     
     def test_error_handling_in_workflow(self, mock_config_file):
         """Test error handling at various stages of the workflow."""
-        with patch('main.DriveDownloader') as MockDownloader, \
-             patch('main.Extractor'), \
-             patch('main.MetadataMerger'), \
-             patch('main.AlbumParser'), \
-             patch('main.StateManager'):
+        with patch('scripts.main.DriveDownloader') as MockDownloader, \
+             patch('scripts.main.Extractor'), \
+             patch('scripts.main.MetadataMerger'), \
+             patch('scripts.main.AlbumParser'), \
+             patch('scripts.main.StateManager'):
             
             # Test authentication failure
             mock_downloader = MockDownloader.return_value

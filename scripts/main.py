@@ -23,11 +23,6 @@ from typing import Dict, List, Optional, Tuple
 import yaml
 from tqdm import tqdm
 
-from google_photos_icloud_migration.downloader.drive_downloader import DriveDownloader
-from google_photos_icloud_migration.processor.extractor import Extractor
-from google_photos_icloud_migration.processor.metadata_merger import MetadataMerger
-from google_photos_icloud_migration.parser.album_parser import AlbumParser
-from google_photos_icloud_migration.uploader.icloud_uploader import iCloudPhotosSyncUploader
 # Add parent directory to path to allow imports from package
 import sys
 from pathlib import Path
@@ -35,6 +30,12 @@ script_dir = Path(__file__).parent
 project_root = script_dir.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
+
+from google_photos_icloud_migration.downloader.drive_downloader import DriveDownloader
+from google_photos_icloud_migration.processor.extractor import Extractor
+from google_photos_icloud_migration.processor.metadata_merger import MetadataMerger
+from google_photos_icloud_migration.parser.album_parser import AlbumParser
+from google_photos_icloud_migration.uploader.icloud_uploader import iCloudPhotosSyncUploader
 
 from scripts.migration_statistics import MigrationStatistics
 from scripts.report_generator import ReportGenerator
