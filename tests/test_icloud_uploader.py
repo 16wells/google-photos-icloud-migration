@@ -29,8 +29,8 @@ class TestICloudPhotosSyncUploader:
     
     @pytest.mark.skipif(not PHOTOS_SYNC_UPLOADER_AVAILABLE, reason="iCloudPhotosSyncUploader not available")
     @pytest.mark.skipif(not PHOTOKIT_AVAILABLE, reason="PhotoKit framework not available")
-    @patch('google_photos_icloud_migration.uploader.icloud_uploader.platform.system')
-    @patch('google_photos_icloud_migration.uploader.icloud_uploader.PHPhotoLibrary')
+    @patch('platform.system')
+    @patch('Photos.PHPhotoLibrary')
     def test_initialization_macos(self, mock_library, mock_platform):
         """Test initialization on macOS."""
         mock_platform.return_value = 'Darwin'
@@ -44,7 +44,7 @@ class TestICloudPhotosSyncUploader:
         assert uploader is not None
     
     @pytest.mark.skipif(not PHOTOS_SYNC_UPLOADER_AVAILABLE, reason="iCloudPhotosSyncUploader not available")
-    @patch('google_photos_icloud_migration.uploader.icloud_uploader.platform.system')
+    @patch('platform.system')
     def test_initialization_non_macos(self, mock_platform):
         """Test that initialization fails on non-macOS."""
         mock_platform.return_value = 'Linux'
@@ -54,8 +54,8 @@ class TestICloudPhotosSyncUploader:
     
     @pytest.mark.skipif(not PHOTOS_SYNC_UPLOADER_AVAILABLE, reason="iCloudPhotosSyncUploader not available")
     @pytest.mark.skipif(not PHOTOKIT_AVAILABLE, reason="PhotoKit framework not available")
-    @patch('google_photos_icloud_migration.uploader.icloud_uploader.platform.system')
-    @patch('google_photos_icloud_migration.uploader.icloud_uploader.PHPhotoLibrary')
+    @patch('platform.system')
+    @patch('Photos.PHPhotoLibrary')
     def test_upload_file_image(self, mock_library, mock_platform, tmp_path):
         """Test uploading an image file."""
         mock_platform.return_value = 'Darwin'
@@ -63,10 +63,10 @@ class TestICloudPhotosSyncUploader:
         mock_lib.authorizationStatus.return_value = 3  # Authorized
         
         # Mock PhotoKit components
-        with patch('google_photos_icloud_migration.uploader.icloud_uploader.PHAssetChangeRequest') as mock_request, \
-             patch('google_photos_icloud_migration.uploader.icloud_uploader.NSURL') as mock_url, \
-             patch('google_photos_icloud_migration.uploader.icloud_uploader.NSDate') as mock_date, \
-             patch('google_photos_icloud_migration.uploader.icloud_uploader.NSRunLoop') as mock_runloop:
+        with patch('Photos.PHAssetChangeRequest') as mock_request, \
+             patch('Foundation.NSURL') as mock_url, \
+             patch('Foundation.NSDate') as mock_date, \
+             patch('Foundation.NSRunLoop') as mock_runloop:
             
             # Setup mocks
             mock_change_request = Mock()
@@ -95,12 +95,12 @@ class TestICloudPhotosSyncUploader:
     
     @pytest.mark.skipif(not PHOTOS_SYNC_UPLOADER_AVAILABLE, reason="iCloudPhotosSyncUploader not available")
     @pytest.mark.skipif(not PHOTOKIT_AVAILABLE, reason="PhotoKit framework not available")
-    @patch('google_photos_icloud_migration.uploader.icloud_uploader.platform.system')
+    @patch('platform.system')
     def test_permission_request(self, mock_platform):
         """Test permission request flow."""
         mock_platform.return_value = 'Darwin'
         
-        with patch('google_photos_icloud_migration.uploader.icloud_uploader.PHPhotoLibrary') as mock_library:
+        with patch('Photos.PHPhotoLibrary') as mock_library:
             mock_lib = Mock()
             # Test various authorization statuses
             mock_lib.authorizationStatus.return_value = 0  # NotDetermined
@@ -116,11 +116,17 @@ class TestICloudPhotosSyncUploader:
         test_file = tmp_path / 'test.jpg'
         test_file.write_bytes(b'test data')
         
-        uploader = iCloudPhotosSyncUploader()
-        identifier = uploader._get_file_identifier(test_file)
-        
-        assert isinstance(identifier, str)
-        assert len(identifier) > 0
+        with patch('platform.system', return_value='Darwin'), \
+             patch('Photos.PHPhotoLibrary') as mock_library:
+            mock_lib = Mock()
+            mock_lib.authorizationStatus.return_value = 3  # Authorized
+            mock_library.return_value = mock_lib
+            
+            uploader = iCloudPhotosSyncUploader()
+            identifier = uploader._get_file_identifier(test_file)
+            
+            assert isinstance(identifier, str)
+            assert len(identifier) > 0
     
     @pytest.mark.skipif(not PHOTOS_SYNC_UPLOADER_AVAILABLE, reason="iCloudPhotosSyncUploader not available")
     @pytest.mark.skipif(not PHOTOKIT_AVAILABLE, reason="PhotoKit framework not available")
@@ -128,8 +134,8 @@ class TestICloudPhotosSyncUploader:
         """Test upload tracking file handling."""
         tracking_file = tmp_path / 'tracking.json'
         
-        with patch('google_photos_icloud_migration.uploader.icloud_uploader.platform.system', return_value='Darwin'), \
-             patch('google_photos_icloud_migration.uploader.icloud_uploader.PHPhotoLibrary') as mock_library:
+        with patch('platform.system', return_value='Darwin'), \
+             patch('Photos.PHPhotoLibrary') as mock_library:
             mock_lib = Mock()
             mock_lib.authorizationStatus.return_value = 3  # Authorized
             mock_library.return_value = mock_lib
@@ -144,8 +150,8 @@ class TestICloudPhotosSyncUploader:
         test_file = tmp_path / 'test.jpg'
         test_file.write_bytes(b'test data')
         
-        with patch('google_photos_icloud_migration.uploader.icloud_uploader.platform.system', return_value='Darwin'), \
-             patch('google_photos_icloud_migration.uploader.icloud_uploader.PHPhotoLibrary') as mock_library:
+        with patch('platform.system', return_value='Darwin'), \
+             patch('Photos.PHPhotoLibrary') as mock_library:
             mock_lib = Mock()
             mock_lib.authorizationStatus.return_value = 3  # Authorized
             mock_library.return_value = mock_lib
