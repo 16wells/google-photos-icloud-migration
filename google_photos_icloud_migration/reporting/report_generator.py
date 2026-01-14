@@ -5,15 +5,8 @@ import json
 from pathlib import Path
 from typing import Dict, Optional
 from datetime import datetime
-# Add parent directory to path to allow imports from package
-import sys
-from pathlib import Path
-script_dir = Path(__file__).parent
-project_root = script_dir.parent
-if str(project_root) not in sys.path:
-    sys.path.insert(0, str(project_root))
 
-from scripts.migration_statistics import MigrationStatistics
+from .migration_statistics import MigrationStatistics
 
 
 class ReportGenerator:
@@ -374,4 +367,3 @@ class ReportGenerator:
             f.write(content)
         
         return output_path
-

@@ -215,4 +215,3 @@ class MigrationStatistics:
         """Save statistics to JSON file."""
         with open(file_path, 'w') as f:
             json.dump(self.to_dict(), f, indent=2)
-

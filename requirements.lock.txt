@@ -1,0 +1,15 @@
+google-api-python-client>=2.100.0
+google-auth-httplib2>=0.1.1
+google-auth-oauthlib>=1.1.0
+Pillow>=10.0.0
+PyYAML>=6.0
+tqdm>=4.66.0
+python-dateutil>=2.8.2
+pyobjc-framework-Photos>=10.0
+python-dotenv>=1.0.0
+jsonschema>=4.17.0
+rich>=13.0.0
+psutil>=5.9.0
+selenium>=4.15.0
+webdriver-manager>=4.0.0
+

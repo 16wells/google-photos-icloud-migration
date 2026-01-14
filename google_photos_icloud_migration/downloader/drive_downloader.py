@@ -47,6 +47,11 @@ class DriveDownloader:
         # Backward compatibility: if legacy token.json exists in CWD, keep using it
         legacy = Path('token.json')
         if legacy.exists():
+            logger.warning(
+                "Found 'token.json' in current directory. "
+                "For better security, please move this file to standard configuration locations "
+                "(e.g. ~/.config/google-photos-icloud-migration/)"
+            )
             return legacy
 
         xdg_config_home = os.environ.get('XDG_CONFIG_HOME')
