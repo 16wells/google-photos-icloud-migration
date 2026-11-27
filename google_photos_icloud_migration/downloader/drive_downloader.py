@@ -20,6 +20,16 @@ from google_photos_icloud_migration.exceptions import DownloadError, Authenticat
 
 logger = logging.getLogger(__name__)
 
+# MIME types Google Drive uses for zip archives (Takeout uses application/x-zip).
+ZIP_MIME_TYPES = (
+    'application/zip',
+    'application/x-zip-compressed',
+    'application/x-zip',
+)
+
+# nextPageToken must be requested explicitly, or results stop after one page.
+LIST_FIELDS = "nextPageToken, files(id, name, size, modifiedTime)"
+
 # Scopes required for Google Drive API
 SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
 
@@ -234,8 +244,12 @@ class DriveDownloader:
         import time
         from googleapiclient.errors import HttpError
         
-        query = "mimeType='application/zip' or mimeType='application/x-zip-compressed'"
-        
+        # Google Takeout uploads its archives as application/x-zip. The OR group
+        # must be parenthesized, or Drive applies the conditions after it to the
+        # last alternative only and returns zips from anywhere in the Drive.
+        zip_types = " or ".join(f"mimeType='{mime}'" for mime in ZIP_MIME_TYPES)
+        query = f"({zip_types}) and trashed=false"
+
         if folder_id:
             query += f" and '{folder_id}' in parents"
         
@@ -247,7 +261,7 @@ class DriveDownloader:
             try:
                 results = self.service.files().list(
                     q=query,
-                    fields="files(id, name, size, modifiedTime)",
+                    fields=LIST_FIELDS,
                     pageSize=1000
                 ).execute()
                 break
@@ -278,7 +292,7 @@ class DriveDownloader:
             try:
                 results = self.service.files().list(
                     q=query,
-                    fields="files(id, name, size, modifiedTime)",
+                    fields=LIST_FIELDS,
                     pageSize=1000,
                     pageToken=results['nextPageToken']
                 ).execute()

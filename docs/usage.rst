@@ -16,7 +16,7 @@ Basic Usage
 
 .. code-block:: bash
 
-   python3 main.py --config config.yaml
+   python3 scripts/main.py --config config.yaml
 
 Command Line Options
 --------------------
@@ -25,13 +25,14 @@ Command Line Options
 
 .. code-block:: bash
 
-   python3 main.py --config config.yaml [OPTIONS]
+   python3 scripts/main.py --config config.yaml [OPTIONS]
 
    Options:
      --config PATH              Path to config file (required)
      --retry-failed             Retry previously failed uploads
      --retry-failed-extractions Retry failed extractions
-     --redownload-zips          Re-download zip files for failed uploads
+     --retry-failed-conversions Retry failed video conversions
+     --retry-failed-photos-copies Retry failed Photos library copies
 
 **process_local_zips.py options:**
 

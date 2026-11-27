@@ -20,8 +20,7 @@ project_root = Path(__file__).parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from google_photos_icloud_migration.orchestrator import MigrationOrchestrator
-# MigrationStoppedException might need to be imported from exceptions if it was moved, or mock it if not used
+from google_photos_icloud_migration.cli.main import MigrationOrchestrator
 
 
 
@@ -30,10 +29,10 @@ class TestMigrationOrchestrator:
     
     def test_initialization(self, config_file):
         """Test that MigrationOrchestrator can be initialized."""
-        with patch('google_photos_icloud_migration.orchestrator.DriveDownloader'), \
-             patch('google_photos_icloud_migration.orchestrator.Extractor'), \
-             patch('google_photos_icloud_migration.orchestrator.MetadataMerger'), \
-             patch('google_photos_icloud_migration.orchestrator.AlbumParser'):
+        with patch('google_photos_icloud_migration.cli.main.DriveDownloader'), \
+             patch('google_photos_icloud_migration.cli.main.Extractor'), \
+             patch('google_photos_icloud_migration.cli.main.MetadataMerger'), \
+             patch('google_photos_icloud_migration.cli.main.AlbumParser'):
             
             orchestrator = MigrationOrchestrator(str(config_file))
             
@@ -43,10 +42,10 @@ class TestMigrationOrchestrator:
     
     def test_load_config(self, config_file, sample_config):
         """Test configuration loading."""
-        with patch('google_photos_icloud_migration.orchestrator.DriveDownloader'), \
-             patch('google_photos_icloud_migration.orchestrator.Extractor'), \
-             patch('google_photos_icloud_migration.orchestrator.MetadataMerger'), \
-             patch('google_photos_icloud_migration.orchestrator.AlbumParser'):
+        with patch('google_photos_icloud_migration.cli.main.DriveDownloader'), \
+             patch('google_photos_icloud_migration.cli.main.Extractor'), \
+             patch('google_photos_icloud_migration.cli.main.MetadataMerger'), \
+             patch('google_photos_icloud_migration.cli.main.AlbumParser'):
             
             orchestrator = MigrationOrchestrator(str(config_file))
             
@@ -65,10 +64,10 @@ class TestMigrationOrchestrator:
         with open(config_file, 'w') as f:
             yaml.dump(minimal_config, f)
         
-        with patch('google_photos_icloud_migration.orchestrator.DriveDownloader'), \
-             patch('google_photos_icloud_migration.orchestrator.Extractor'), \
-             patch('google_photos_icloud_migration.orchestrator.MetadataMerger'), \
-             patch('google_photos_icloud_migration.orchestrator.AlbumParser'):
+        with patch('google_photos_icloud_migration.cli.main.DriveDownloader'), \
+             patch('google_photos_icloud_migration.cli.main.Extractor'), \
+             patch('google_photos_icloud_migration.cli.main.MetadataMerger'), \
+             patch('google_photos_icloud_migration.cli.main.AlbumParser'):
             
             orchestrator = MigrationOrchestrator(str(config_file))
             
@@ -76,10 +75,10 @@ class TestMigrationOrchestrator:
             assert 'batch_size' in orchestrator.config['processing']
             assert orchestrator.config['processing']['batch_size'] == 100
     
-    @patch('google_photos_icloud_migration.orchestrator.DriveDownloader')
-    @patch('google_photos_icloud_migration.orchestrator.Extractor')
-    @patch('google_photos_icloud_migration.orchestrator.MetadataMerger')
-    @patch('google_photos_icloud_migration.orchestrator.AlbumParser')
+    @patch('google_photos_icloud_migration.cli.main.DriveDownloader')
+    @patch('google_photos_icloud_migration.cli.main.Extractor')
+    @patch('google_photos_icloud_migration.cli.main.MetadataMerger')
+    @patch('google_photos_icloud_migration.cli.main.AlbumParser')
     def test_setup_logging(self, mock_parser, mock_merger, mock_extractor, mock_downloader, config_file):
         """Test that logging is set up correctly."""
         orchestrator = MigrationOrchestrator(str(config_file))
